@@ -186,6 +186,29 @@ mmx_add_module(mm_orderbook
   DEPS    mm_exchange
 )
 
+# L1 - strategy runtime. Links mm_orderbook and mm_common and NOTHING ELSE.
+# That single line is what makes "a strategy cannot reach the exchange"
+# structural: there is no adapter, no Asio, no OpenSSL and no JSON in its
+# dependency closure to reach through.
+file(GLOB_RECURSE MM_STRATEGY_SRC CONFIGURE_DEPENDS "src/strategy/*.cpp")
+mmx_add_module(mm_strategy
+  SOURCES ${MM_STRATEGY_SRC}
+  DEPS    mm_orderbook
+)
+
+# Strategy plug-ins.
+#
+# An OBJECT library, not a static one: a self-registering translation unit that
+# nothing references is dead-stripped out of a static archive, and the strategy
+# then silently vanishes from the registry at link time. Object libraries are
+# linked whole. tests/strategy_swap asserts the registry is actually populated.
+file(GLOB_RECURSE MM_STRATEGIES_SRC CONFIGURE_DEPENDS "strategies/*/*.cpp")
+if(MM_STRATEGIES_SRC)
+  add_library(mm_strategies OBJECT ${MM_STRATEGIES_SRC})
+  target_include_directories(mm_strategies PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+  target_link_libraries(mm_strategies PUBLIC mm_flags mm_strategy)
+endif()
+
 # Binance adapter. Links mm_orderbook (for synchronization) plus the header-only
 # Boost.Asio/Beast and nlohmann/json, which appear here and nowhere above.
 file(GLOB_RECURSE MM_BINANCE_SRC CONFIGURE_DEPENDS "src/exchange/binance/*.cpp")
@@ -276,10 +299,11 @@ if(MMX_BUILD_TESTS)
     set_tests_properties(${suite} PROPERTIES TIMEOUT 300)
   endfunction()
 
-  mmx_add_test_suite(unit mm_common mm_exchange mm_orderbook mm_exchange_mock mm_exchange_binance)
-  mmx_add_test_suite(architecture mm_common mm_exchange mm_orderbook mm_exchange_mock mm_exchange_binance)
-  mmx_add_test_suite(failure mm_common mm_exchange mm_orderbook mm_exchange_mock mm_exchange_binance)
-  mmx_add_test_suite(integration mm_common mm_exchange mm_orderbook mm_exchange_mock mm_exchange_binance)
+  mmx_add_test_suite(unit mm_common mm_exchange mm_orderbook mm_strategy mm_strategies mm_exchange_mock mm_exchange_binance)
+  mmx_add_test_suite(architecture mm_common mm_exchange mm_orderbook mm_strategy mm_strategies mm_exchange_mock mm_exchange_binance)
+  mmx_add_test_suite(failure mm_common mm_exchange mm_orderbook mm_strategy mm_strategies mm_exchange_mock mm_exchange_binance)
+  mmx_add_test_suite(strategy_swap mm_common mm_exchange mm_orderbook mm_strategy mm_strategies mm_exchange_mock mm_exchange_binance)
+  mmx_add_test_suite(integration mm_common mm_exchange mm_orderbook mm_strategy mm_strategies mm_exchange_mock mm_exchange_binance)
 
   # Acceptance tests B and F are source-level properties, not runtime ones:
   # no core file may name a venue or include an adapter header. Enforced here
@@ -304,7 +328,7 @@ if(MMX_BUILD_BENCH)
     file(GLOB_RECURSE MM_BENCH_SRC CONFIGURE_DEPENDS "benchmarks/*.cpp")
     if(MM_BENCH_SRC)
       add_executable(mm_bench ${MM_BENCH_SRC})
-      target_link_libraries(mm_bench PRIVATE mm_common mm_exchange mm_orderbook mm_exchange_mock mm_exchange_binance benchmark::benchmark)
+      target_link_libraries(mm_bench PRIVATE mm_common mm_exchange mm_orderbook mm_strategy mm_strategies mm_exchange_mock mm_exchange_binance benchmark::benchmark)
     endif()
   else()
     message(STATUS "Google Benchmark not found - benchmarks disabled")

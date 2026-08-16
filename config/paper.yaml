@@ -24,16 +24,29 @@ symbols:
     quote_size: 0.001
 
 strategy:
-  name: finalized_mm_v1
+  # TEST/REFERENCE ONLY. reference_mm_v1 exists to validate the runtime; it is
+  # not a trading strategy, is not profitable, and is not suitable for live use.
+  # Replace this name with the finalized strategy from the research platform.
+  name: reference_mm_v1
   version: 1
+  enabled: true
+  quoting_enabled: true
+  evaluation_mode: on_bbo_change_and_timer
   budget_ns: 50000          # 50 us per callback before a violation is counted
+  max_consecutive_budget_violations: 5
+  max_consecutive_invalid_outputs: 3
   timer_interval_ms: 100
-  params:
-    # Opaque to the engine; interpreted only by the named strategy module.
-    base_half_spread_bps: 4.0
-    inventory_skew_coefficient: 0.6
-    min_spread_bps: 2.0
-    max_spread_bps: 25.0
+  max_quote_distance_bps: 500
+
+# Finalized parameters, one block per strategy. Only the selected strategy's
+# block is used, so a file can carry several and switch by changing the name
+# above. Contents are opaque to the engine.
+strategies:
+  reference_mm_v1:
+    half_spread_bps: 4.0
+    quote_size: 0.001
+    inventory_skew_bps: 8.0
+    max_inventory_utilisation: 0.9
 
 risk:
   max_position: 0.05

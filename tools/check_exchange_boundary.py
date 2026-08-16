@@ -31,6 +31,29 @@ ADAPTER_DIRS = ("include/mm/exchange/", "src/exchange/")
 # The one subdirectory of those trees that must stay venue-neutral.
 NEUTRAL_ADAPTER_SUBDIR = "exchange/common/"
 
+# Directories holding strategy code. A strategy is a pure decision function; if
+# it can include a socket, a REST client or the OMS, then "the strategy cannot
+# reach the exchange" is a hope rather than a property.
+STRATEGY_DIRS = ("strategies/", "include/mm/strategy/", "src/strategy/")
+
+# Headers a strategy must never pull in. Each represents a capability the
+# strategy boundary exists to withhold.
+STRATEGY_FORBIDDEN_INCLUDES = [
+    ("boost/asio", "networking"),
+    ("boost/beast", "HTTP/WebSocket"),
+    ("openssl/", "TLS and signing"),
+    ("nlohmann/json", "venue wire formats"),
+    ("mm/exchange/binance/", "a venue adapter"),
+    ("mm/exchange/mock/", "a venue adapter"),
+    ("mm/exchange/paper/", "an execution adapter"),
+    ("mm/oms/", "order management"),
+    ("mm/execution/", "order execution"),
+    ("mm/risk/", "risk state"),
+    ("yaml-cpp/", "configuration parsing"),
+    ("curl/", "networking"),
+    ("sys/socket", "networking"),
+]
+
 VENUE_NAMES = [
     "binance", "okx", "bybit", "coinbase", "kraken",
     "hyperliquid", "deribit", "bitmex", "bitstamp", "gemini",
@@ -107,6 +130,10 @@ def strip_comments(text: str) -> str:
     return "".join(out)
 
 
+def is_strategy_file(rel: str) -> bool:
+    return any(rel.startswith(d) for d in STRATEGY_DIRS)
+
+
 def is_adapter_file(rel: str) -> bool:
     """True for files inside a venue adapter directory (not exchange/common)."""
     if NEUTRAL_ADAPTER_SUBDIR in rel:
@@ -122,6 +149,8 @@ def scan() -> int:
         list((ROOT / "include").rglob("*.hpp"))
         + list((ROOT / "src").rglob("*.cpp"))
         + list((ROOT / "src").rglob("*.hpp"))
+        + list((ROOT / "strategies").rglob("*.hpp"))
+        + list((ROOT / "strategies").rglob("*.cpp"))
     )
 
     # Boundary required BEFORE the name but deliberately NOT after. Requiring a
@@ -151,6 +180,19 @@ def scan() -> int:
                     f"'mm/exchange/{m.group(1)}/...' - the core must compile with "
                     f"every adapter removed"
                 )
+
+        # --- Strategy layer: no capability it is meant to be denied --------
+        if is_strategy_file(rel):
+            for lineno, line in enumerate(code.splitlines(), 1):
+                stripped = line.strip()
+                if not stripped.startswith("#include"):
+                    continue
+                for needle, capability in STRATEGY_FORBIDDEN_INCLUDES:
+                    if needle in stripped:
+                        violations.append(
+                            f"{rel}:{lineno}: strategy code includes '{needle}' "
+                            f"({capability}); the strategy boundary exists to withhold it"
+                        )
 
         # --- Test F: no venue identifiers outside adapter directories ----
         if is_adapter_file(rel):
@@ -206,6 +248,23 @@ def self_test() -> int:
     include_must_detect = ['#include "mm/exchange/binance/BinanceCodec.hpp"']
     include_must_ignore = ['#include "mm/exchange/common/ExchangeTypes.hpp"']
 
+    # Strategy-layer capability denial.
+    strategy_must_detect = [
+        '#include <boost/asio/io_context.hpp>',
+        '#include <boost/beast/websocket.hpp>',
+        '#include <openssl/hmac.h>',
+        '#include <nlohmann/json.hpp>',
+        '#include "mm/exchange/binance/BinanceMarketData.hpp"',
+        '#include "mm/oms/OrderStore.hpp"',
+        '#include "mm/risk/RiskEngine.hpp"',
+    ]
+    strategy_must_ignore = [
+        '#include "mm/strategy/IStrategy.hpp"',
+        '#include "mm/common/Types.hpp"',
+        '#include "mm/exchange/common/MarketDataEvents.hpp"',
+        '#include "mm/orderbook/OrderBook.hpp"',
+    ]
+
     failures = []
     for line in must_detect:
         if not venue_pattern.search(strip_comments(line)):
@@ -226,13 +285,26 @@ def self_test() -> int:
     if venue_pattern.search(strip_comments("/* uses the Binance depth stream */ int x;")):
         failures.append("a block comment mentioning a venue was treated as a leak")
 
+    def forbidden_hit(line: str) -> bool:
+        stripped = line.strip()
+        if not stripped.startswith("#include"):
+            return False
+        return any(needle in stripped for needle, _ in STRATEGY_FORBIDDEN_INCLUDES)
+
+    for line in strategy_must_detect:
+        if not forbidden_hit(line):
+            failures.append(f"missed a forbidden strategy include: {line}")
+    for line in strategy_must_ignore:
+        if forbidden_hit(line):
+            failures.append(f"false positive on a permitted strategy include: {line}")
+
     if failures:
         print("SELF-TEST FAILED:")
         for f in failures:
             print(f"  {f}")
         return 1
-    print(f"self-test: {len(must_detect)} detections and "
-          f"{len(must_ignore)} non-detections behave as expected")
+    print(f"self-test: {len(must_detect) + len(strategy_must_detect)} detections and "
+          f"{len(must_ignore) + len(strategy_must_ignore)} non-detections behave as expected")
     return 0
 
 

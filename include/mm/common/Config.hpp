@@ -15,6 +15,7 @@
 ///     refusal to start -- never a live session.
 
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -58,10 +59,34 @@ struct SymbolConfig {
 struct StrategyConfig {
     std::string name;
     std::int32_t version = 0;
-    /// Wall-clock budget for one strategy callback. Exceeding it repeatedly
-    /// disables the strategy (docs/concurrency.md §6).
+
+    /// Whether the strategy runs at all.
+    bool enabled = true;
+    /// Operator quote switch, separate from `enabled`. When false the strategy
+    /// is still evaluated so its internal state stays warm, but no quoting
+    /// intent is accepted. Turning quoting off must not require restarting a
+    /// strategy that has spent minutes warming up.
+    bool quoting_enabled = true;
+
+    /// When the runtime asks the strategy for intent. See
+    /// `mm::strategy::EvaluationMode`; parsed and validated at load time.
+    std::string evaluation_mode = "on_bbo_change_and_timer";
+
+    /// Budget for one strategy callback. Exceeding it repeatedly faults the
+    /// strategy (docs/concurrency.md §6, docs/strategy-runtime.md).
     std::int64_t budget_ns = 50'000;
+    std::int32_t max_consecutive_budget_violations = 5;
+    std::int32_t max_consecutive_invalid_outputs = 3;
     std::int64_t timer_interval_ms = 100;
+
+    /// Sanity bound on how far a quote may sit from the touch. A strategy
+    /// pricing further away has almost certainly miscalculated.
+    std::int32_t max_quote_distance_bps = 500;
+
+    /// Finalized strategy parameters. Populated from the `strategies.<name>`
+    /// block for the selected strategy, so the core never has a field that
+    /// belongs to one particular strategy. Legacy `strategy.params` is merged
+    /// in for compatibility with Phase 2 configs.
     Params params;
 };
 
@@ -161,6 +186,11 @@ struct EngineConfig {
     ExchangeConfig exchange;
     std::vector<SymbolConfig> symbols;
     StrategyConfig strategy;
+    /// Parameter blocks for every strategy present in the file, keyed by name.
+    /// Only the selected strategy's block is merged into `strategy.params`;
+    /// the rest are kept so a config can carry several and switch between them
+    /// by changing one line.
+    std::map<std::string, Params, std::less<>> strategy_params;
     RiskConfig risk;
     ExecutionRateConfig execution;
     SafetyConfig safety;

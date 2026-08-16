@@ -199,10 +199,32 @@ compare like for like.
 Same lesson as Phase 2: a benchmark that measures the wrong thing is worse than
 no benchmark, because it produces a number people design against.
 
+## Phase 5 — strategy runtime
+
+Measured with the reference strategy, which is deliberately trivial. These are
+therefore a **floor for the runtime's overhead**, not a prediction of what a
+real strategy will cost.
+
+| Benchmark | Time | Notes |
+| --- | --- | --- |
+| `RuntimeGate` | 6.1 ns | all gates, without building a context |
+| `ContextConstruction` | 38.4 ns | the immutable view handed to the strategy |
+| `StrategyInvocation` | 52.4 ns | the strategy call alone |
+| `IntentValidation` | 18.1 ns | tick, lot, notional, provenance, distance |
+| **`FullRuntimePath`** | **132 ns** | gate, invoke, time, validate, stamp |
+
+The parts sum to about 109 ns against a 132 ns whole. The difference is the
+runtime's own bookkeeping — recording the latency histogram, stamping identity
+and sequence, updating metrics — which is worth stating because it is the cost
+of the watchdog rather than of the strategy.
+
+`gate()` at 6.1 ns versus 38.4 ns to build a context is why the gate is public:
+the engine can ask whether an evaluation is worth assembling a context for
+before assembling one.
+
 ## Not yet benchmarked
 
 These arrive with their phases and are listed so the gaps are explicit:
 
-market-state generation · strategy invocation · quote-decision diffing · risk
-validation · OMS state transition · order serialization · end-to-end
-tick-to-trade.
+quote-decision diffing · risk validation · OMS state transition · order
+serialization · end-to-end tick-to-trade.
