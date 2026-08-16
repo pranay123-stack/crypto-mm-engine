@@ -1,0 +1,102 @@
+# Paper trading against live Binance market data.
+#
+# This is the default configuration. It consumes real market data and runs the
+# real strategy, risk engine, OMS and portfolio; only the execution adapter is
+# simulated. It is an operational rehearsal environment, not a backtester -- no
+# historical data is read and no parameters are fitted here.
+
+mode: paper
+session_name: paper
+
+exchange:
+  name: binance
+  rest_base_url: https://api.binance.com
+  ws_base_url: wss://stream.binance.com:9443
+  # Even in paper mode, market data uses the public endpoints; no credentials
+  # are required and none are read.
+  credentials_env_prefix: BINANCE_PAPER
+  recv_window_ms: 5000
+  rest_timeout_ms: 3000
+  book_depth: 50
+
+symbols:
+  - symbol: BTCUSDT
+    quote_size: 0.001
+
+strategy:
+  name: finalized_mm_v1
+  version: 1
+  budget_ns: 50000          # 50 us per callback before a violation is counted
+  timer_interval_ms: 100
+  params:
+    # Opaque to the engine; interpreted only by the named strategy module.
+    base_half_spread_bps: 4.0
+    inventory_skew_coefficient: 0.6
+    min_spread_bps: 2.0
+    max_spread_bps: 25.0
+
+risk:
+  max_position: 0.05
+  max_notional: 5000
+  max_portfolio_notional: 10000
+  max_order_qty: 0.01
+  max_order_notional: 1200
+  max_active_orders_per_symbol: 4
+  max_active_orders_total: 20
+  max_daily_loss: 200
+  max_session_loss: 200
+  emergency_loss: 400
+  max_quote_distance_bps: 500
+
+execution:
+  max_orders_per_second: 20
+  max_cancels_per_second: 20
+  max_replaces_per_second: 20
+  max_messages_per_second: 50
+  ack_timeout_ms: 5000
+  cancel_timeout_ms: 5000
+
+safety:
+  max_market_data_age_ms: 500
+  max_processing_delay_ms: 100
+  max_clock_skew_ms: 1000
+  max_consecutive_rejects: 5
+  reconcile_interval_ms: 30000
+  live_trading_enabled: false
+  cancel_all_on_shutdown: true
+
+paper:
+  ack_latency_us: 2000
+  fill_latency_us: 1000
+  cancel_latency_us: 2000
+  maker_fee_bps: 1.0
+  taker_fee_bps: 4.0
+  # Assume we win the queue race only half the time a trade passes through our
+  # price. Assuming every touch fill lands is the fastest way to make a paper
+  # run flatter a strategy that will not survive contact with a real book.
+  queue_fill_ratio: 0.5
+  reject_probability: 0.0
+
+monitoring:
+  enabled: true
+  http_host: 127.0.0.1
+  http_port: 8787
+  snapshot_interval_ms: 100
+
+persistence:
+  journal_dir: var/journal
+  state_file: var/state/engine_state.json
+  journal_flush_interval_ms: 200
+  fsync_on_flush: true
+
+logging:
+  level: info
+  dir: var/log
+  max_file_bytes: 268435456
+  max_files: 10
+  console: true
+
+io:
+  md_threads: 1
+  exec_threads: 1
+  trading_cpu: -1           # -1 disables pinning
