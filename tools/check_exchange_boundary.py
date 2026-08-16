@@ -124,8 +124,12 @@ def scan() -> int:
         + list((ROOT / "src").rglob("*.hpp"))
     )
 
+    # Boundary required BEFORE the name but deliberately NOT after. Requiring a
+    # trailing boundary silently missed the most likely leak form there is --
+    # a venue name embedded in an identifier, as in `BinanceDepthUpdate` or
+    # `parseBinanceMessage`. That gap was found by the self-test below.
     venue_pattern = re.compile(
-        r"\b(" + "|".join(re.escape(v) for v in VENUE_NAMES) + r")\b", re.IGNORECASE
+        r"\b(" + "|".join(re.escape(v) for v in VENUE_NAMES) + r")", re.IGNORECASE
     )
     wire_pattern = re.compile("|".join(re.escape(t) for t in VENUE_WIRE_TOKENS))
     adapter_include = re.compile(
@@ -173,5 +177,66 @@ def scan() -> int:
     return 0
 
 
+def self_test() -> int:
+    """Verifies the checker actually detects the leaks it claims to.
+
+    A boundary checker that silently passes everything is worse than none: it
+    reports success and trains people to trust it. These cases are the forms a
+    real leak takes.
+    """
+    venue_pattern = re.compile(
+        r"\b(" + "|".join(re.escape(v) for v in VENUE_NAMES) + r")", re.IGNORECASE
+    )
+    adapter_include = re.compile(
+        r'#\s*include\s*[<"]mm/exchange/(?!common/)([A-Za-z0-9_]+)/'
+    )
+
+    must_detect = [
+        "struct BinanceDepthUpdate { int u; };",      # embedded in CamelCase
+        "using binance_seq = uint64_t;",              # snake_case prefix
+        "static const char* BINANCE_HOST = \"x\";",   # SCREAMING_CASE
+        "void parse(const OkxBook& b);",              # a different venue
+        "class BybitFeed;",
+    ]
+    must_ignore = [
+        "struct DepthUpdate { int u; };",
+        "using venue_seq = uint64_t;",
+        "int finance_rate = 0;",                      # 'finance' must not match
+    ]
+    include_must_detect = ['#include "mm/exchange/binance/BinanceCodec.hpp"']
+    include_must_ignore = ['#include "mm/exchange/common/ExchangeTypes.hpp"']
+
+    failures = []
+    for line in must_detect:
+        if not venue_pattern.search(strip_comments(line)):
+            failures.append(f"missed a venue identifier: {line}")
+    for line in must_ignore:
+        if venue_pattern.search(strip_comments(line)):
+            failures.append(f"false positive on: {line}")
+    for line in include_must_detect:
+        if not adapter_include.search(line):
+            failures.append(f"missed an adapter include: {line}")
+    for line in include_must_ignore:
+        if adapter_include.search(line):
+            failures.append(f"false positive on include: {line}")
+
+    # Comments mention venues legitimately and must never trip the check.
+    if venue_pattern.search(strip_comments("// Binance caps client order ids at 36 chars")):
+        failures.append("a comment mentioning a venue was treated as a leak")
+    if venue_pattern.search(strip_comments("/* uses the Binance depth stream */ int x;")):
+        failures.append("a block comment mentioning a venue was treated as a leak")
+
+    if failures:
+        print("SELF-TEST FAILED:")
+        for f in failures:
+            print(f"  {f}")
+        return 1
+    print(f"self-test: {len(must_detect)} detections and "
+          f"{len(must_ignore)} non-detections behave as expected")
+    return 0
+
+
 if __name__ == "__main__":
-    sys.exit(scan())
+    if "--self-test" in sys.argv:
+        sys.exit(self_test())
+    sys.exit(self_test() or scan())
