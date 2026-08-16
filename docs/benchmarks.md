@@ -242,9 +242,42 @@ costs about 280 ns (132 ns runtime + 152 ns quote manager) — against a
 cross-thread ring hop of 40 ns and a network path measured in tens of
 microseconds.
 
+## Phase 7 — risk engine
+
+Shared laptop, noticeably noisier during this run than earlier phases; treat
+ratios as the signal and absolutes as indicative.
+
+| Path | Time | Notes |
+| --- | --- | --- |
+| `WorstCaseExposure` | 10–14 ns | the exposure arithmetic alone |
+| `RiskKilledRejection` | 74–110 ns | state gate only |
+| `RiskCancel` | 79–112 ns | must stay available in every state |
+| **`RiskApprove`** | **~271 ns** | **the common path: limits, bands, venue rules, exposure** |
+| `RiskReject` | ~340 ns | rejection by a hard limit |
+| `RiskReduce` | 630–1490 ns | binary search over the lot grid |
+
+Reduction is the most expensive path by construction: each search step re-runs
+the real bounds and exposure checks, which is what keeps one source of truth for
+the limits rather than a second algebraic copy that could drift.
+
+### A benchmark that pointed at a real inefficiency
+
+The first measurement had **rejection costing more than reduction** — 1318 ns
+against 1058 — which is backwards, since a rejection should do strictly less
+work. The cause was real: a reducible failure ran the full binary search even
+when there was no room for a single lot, then rejected anyway. Testing one lot
+before searching cut rejection to ~340 ns.
+
+The number was the only reason anyone looked.
+
+### The full pipeline, steady state
+
+Strategy runtime 132 ns + quote manager 152 ns + risk ~271 ns ≈ **555 ns** from
+market event to an approved order action, against a cross-thread ring hop of
+40 ns and a network path measured in tens of microseconds.
+
 ## Not yet benchmarked
 
 These arrive with their phases and are listed so the gaps are explicit:
 
-risk validation · OMS state transition · order serialization · end-to-end
-tick-to-trade.
+OMS state transition · order serialization · end-to-end tick-to-trade.

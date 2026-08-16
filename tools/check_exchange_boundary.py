@@ -41,6 +41,24 @@ STRATEGY_DIRS = ("strategies/", "include/mm/strategy/", "src/strategy/")
 # layers with separate mandates, and merging any of them here would put the
 # decision "is this safe?" in the component that decides "what do we want?".
 QUOTE_DIRS = ("include/mm/quote/", "src/quote/")
+
+# Risk is the safety boundary. It must depend only on normalized abstractions:
+# no venue, no order management, no strategy implementation. A risk engine that
+# can reach the exchange is a risk engine that can be routed around.
+RISK_DIRS = ("include/mm/risk/", "src/risk/")
+RISK_FORBIDDEN_INCLUDES = [
+    ("boost/asio", "networking"),
+    ("boost/beast", "HTTP/WebSocket"),
+    ("openssl/", "TLS and signing"),
+    ("nlohmann/json", "venue wire formats"),
+    ("mm/exchange/binance/", "a venue adapter"),
+    ("mm/exchange/mock/", "a venue adapter"),
+    ("mm/exchange/paper/", "an execution adapter"),
+    ("mm/oms/", "order management"),
+    ("mm/execution/", "order execution"),
+    ("strategies/", "a strategy implementation"),
+    ("curl/", "networking"),
+]
 QUOTE_FORBIDDEN_INCLUDES = [
     ("boost/asio", "networking"),
     ("boost/beast", "HTTP/WebSocket"),
@@ -158,6 +176,10 @@ def is_quote_file(rel: str) -> bool:
     return any(rel.startswith(d) for d in QUOTE_DIRS)
 
 
+def is_risk_file(rel: str) -> bool:
+    return any(rel.startswith(d) for d in RISK_DIRS)
+
+
 def is_adapter_file(rel: str) -> bool:
     """True for files inside a venue adapter directory (not exchange/common)."""
     if NEUTRAL_ADAPTER_SUBDIR in rel:
@@ -229,6 +251,19 @@ def scan() -> int:
                         violations.append(
                             f"{rel}:{lineno}: quote manager includes '{needle}' "
                             f"({capability}); that decision belongs to another layer"
+                        )
+
+        # --- Risk: no venue, order management or strategy code -------------
+        if is_risk_file(rel):
+            for lineno, line in enumerate(code.splitlines(), 1):
+                stripped = line.strip()
+                if not stripped.startswith("#include"):
+                    continue
+                for needle, capability in RISK_FORBIDDEN_INCLUDES:
+                    if needle in stripped:
+                        violations.append(
+                            f"{rel}:{lineno}: risk engine includes '{needle}' "
+                            f"({capability}); the safety boundary must not reach it"
                         )
 
         # --- Test F: no venue identifiers outside adapter directories ----
@@ -309,6 +344,18 @@ def self_test() -> int:
         '#include "mm/common/Time.hpp"',
     ]
 
+    risk_must_detect = [
+        '#include "mm/exchange/binance/BinanceMarketData.hpp"',
+        '#include "mm/oms/OrderStore.hpp"',
+        '#include <boost/asio/io_context.hpp>',
+        '#include "strategies/reference_mm_v1/ReferenceMarketMaker.hpp"',
+    ]
+    risk_must_ignore = [
+        '#include "mm/quote/OrderAction.hpp"',
+        '#include "mm/exchange/common/OrderRequest.hpp"',
+        '#include "mm/common/Fixed.hpp"',
+    ]
+
     strategy_must_ignore = [
         '#include "mm/strategy/IStrategy.hpp"',
         '#include "mm/common/Types.hpp"',
@@ -354,22 +401,36 @@ def self_test() -> int:
     for line in strategy_must_ignore:
         if forbidden_hit(line):
             failures.append(f"false positive on a permitted strategy include: {line}")
+    def risk_forbidden_hit(line: str) -> bool:
+        stripped = line.strip()
+        if not stripped.startswith("#include"):
+            return False
+        return any(needle in stripped for needle, _ in RISK_FORBIDDEN_INCLUDES)
+
     for line in quote_must_detect:
         if not quote_forbidden_hit(line):
             failures.append(f"missed a forbidden quote-manager include: {line}")
     for line in quote_must_ignore:
         if quote_forbidden_hit(line):
             failures.append(f"false positive on a permitted quote include: {line}")
+    for line in risk_must_detect:
+        if not risk_forbidden_hit(line):
+            failures.append(f"missed a forbidden risk include: {line}")
+    for line in risk_must_ignore:
+        if risk_forbidden_hit(line):
+            failures.append(f"false positive on a permitted risk include: {line}")
 
     if failures:
         print("SELF-TEST FAILED:")
         for f in failures:
             print(f"  {f}")
         return 1
-    print(f"self-test: {len(must_detect) + len(strategy_must_detect) + len(quote_must_detect)} "
-          f"detections and "
-          f"{len(must_ignore) + len(strategy_must_ignore) + len(quote_must_ignore)} "
-          f"non-detections behave as expected")
+    detections = (len(must_detect) + len(strategy_must_detect) + len(quote_must_detect) +
+                  len(risk_must_detect))
+    non_detections = (len(must_ignore) + len(strategy_must_ignore) + len(quote_must_ignore) +
+                      len(risk_must_ignore))
+    print(f"self-test: {detections} detections and {non_detections} non-detections "
+          f"behave as expected")
     return 0
 
 

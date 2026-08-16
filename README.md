@@ -8,12 +8,12 @@ parameter optimization, and no alpha research. The separate quant research
 platform owns those and hands this one a finalized strategy module plus its
 validated parameters.
 
-> **Status: PHASE 6 OF 16 COMPLETE — NOT PRODUCTION READY.**
-> The pipeline now runs from live market data to normalized order actions: the
-> Binance adapter synchronizes a real book, a finalized strategy runs inside a
-> runtime that contains and validates it, and the quote manager turns its intent
-> into a desired working-order state. **Nothing can place an order** — no risk
-> engine, no OMS and no execution path exists yet. See [Status](#status).
+> **Status: PHASE 7 OF 16 COMPLETE — NOT PRODUCTION READY.**
+> The pipeline runs from live market data to risk-approved order actions: the
+> Binance adapter synchronizes a real book, a strategy runs inside a runtime that
+> contains it, the quote manager turns intent into desired order state, and the
+> risk engine decides what is permitted. **Nothing can place an order** — no OMS
+> and no execution path exists yet. See [Status](#status).
 
 ---
 
@@ -143,6 +143,7 @@ strategy:
 | [order-book.md](docs/order-book.md)             | book, invariants, synchronization algorithm |
 | [strategy-runtime.md](docs/strategy-runtime.md) | plug-in contract, lifecycle, replacement, failure behaviour |
 | [quote-manager.md](docs/quote-manager.md)       | diff algorithm, ownership, generations, churn controls |
+| [risk-engine.md](docs/risk-engine.md)           | exposure mathematics, fail-closed rules, kill switch |
 | [benchmarks.md](docs/benchmarks.md)             | measured numbers and what they imply      |
 
 ## Status
@@ -201,9 +202,19 @@ Implemented and verified:
   505 tests, 43 benchmarks. It contains no risk logic, no order management and
   no exchange code, enforced by the boundary checker.
 
+- **Phase 7 — Risk engine.** The safety boundary. Worst-case-per-side exposure
+  arithmetic, position/notional/order/working/rate limits, price bands, a
+  five-state machine with reduce-only and operator-only recovery from a kill,
+  explicit and revalidated reduction, and overflow-checked fixed-point
+  throughout. Every fail-closed path refuses new exposure while leaving
+  cancellation available.
+
+  580 tests, 49 benchmarks. Contains no exchange code, no strategy logic and no
+  order management, enforced by the boundary checker.
+
 Not yet implemented — every one of these is currently absent, not partial:
 
-Phase 7 risk engine · Phase 8 OMS · Phase 9
+Phase 8 OMS · Phase 9
 paper execution · Phase 10 portfolio/PnL · Phase 11 reconciliation & recovery ·
 Phase 12 Binance live execution · Phase 13 operations dashboard · Phase 14
 failure hardening · Phase 15 performance hardening · Phase 16 deployment.

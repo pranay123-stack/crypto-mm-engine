@@ -235,12 +235,67 @@ Status parse_quote(const YAML::Node& n, QuoteManagerConfigYaml& cfg) {
     return Status::ok();
 }
 
+Status parse_symbol_risk(const YAML::Node& n, std::vector<SymbolRiskConfig>& out) {
+    if (!n || n.IsNull()) {
+        return Status::ok();
+    }
+    if (!n.IsMap()) {
+        return {ErrorCode::InvalidArgument, "'risk.symbols' must be a map keyed by symbol"};
+    }
+    for (const auto& entry : n) {
+        SymbolRiskConfig sym;
+        sym.symbol = entry.first.as<std::string>();
+        if (sym.symbol.empty()) {
+            return {ErrorCode::InvalidArgument, "'risk.symbols' contains an empty key"};
+        }
+        const std::string path = "risk.symbols." + sym.symbol;
+        MM_RETURN_IF_ERROR(check_known_keys(
+            entry.second, path,
+            {"max_position", "max_position_notional", "max_order_quantity", "max_order_notional",
+             "max_working_exposure", "max_side_exposure", "max_open_orders", "price_band_bps"}));
+        MM_RETURN_IF_ERROR(read_fixed(entry.second, "max_position", path, sym.max_position));
+        MM_RETURN_IF_ERROR(
+            read_fixed(entry.second, "max_position_notional", path, sym.max_position_notional));
+        MM_RETURN_IF_ERROR(
+            read_fixed(entry.second, "max_order_quantity", path, sym.max_order_quantity));
+        MM_RETURN_IF_ERROR(
+            read_fixed(entry.second, "max_order_notional", path, sym.max_order_notional));
+        MM_RETURN_IF_ERROR(
+            read_fixed(entry.second, "max_working_exposure", path, sym.max_working_exposure));
+        MM_RETURN_IF_ERROR(
+            read_fixed(entry.second, "max_side_exposure", path, sym.max_side_exposure));
+        MM_RETURN_IF_ERROR(read_scalar(entry.second, "max_open_orders", path, sym.max_open_orders));
+        MM_RETURN_IF_ERROR(read_scalar(entry.second, "price_band_bps", path, sym.price_band_bps));
+        out.push_back(std::move(sym));
+    }
+    return Status::ok();
+}
+
 Status parse_risk(const YAML::Node& n, RiskConfig& cfg) {
     MM_RETURN_IF_ERROR(check_known_keys(
         n, "risk",
-        {"max_position", "max_notional", "max_portfolio_notional", "max_order_qty",
+        {"enabled", "symbols", "max_market_data_age_ms", "max_position_age_ms",
+         "max_new_orders_per_second", "max_cancels_per_second", "max_replaces_per_second",
+         "max_actions_per_second", "burst_capacity",
+         "max_position", "max_notional", "max_portfolio_notional", "max_order_qty",
          "max_order_notional", "max_active_orders_per_symbol", "max_active_orders_total",
          "max_daily_loss", "max_session_loss", "emergency_loss", "max_quote_distance_bps"}));
+    MM_RETURN_IF_ERROR(read_scalar(n, "enabled", "risk", cfg.enabled));
+    MM_RETURN_IF_ERROR(
+        read_scalar(n, "max_market_data_age_ms", "risk", cfg.max_market_data_age_ms));
+    MM_RETURN_IF_ERROR(read_scalar(n, "max_position_age_ms", "risk", cfg.max_position_age_ms));
+    MM_RETURN_IF_ERROR(
+        read_scalar(n, "max_new_orders_per_second", "risk", cfg.max_new_orders_per_second));
+    MM_RETURN_IF_ERROR(
+        read_scalar(n, "max_cancels_per_second", "risk", cfg.max_cancels_per_second));
+    MM_RETURN_IF_ERROR(
+        read_scalar(n, "max_replaces_per_second", "risk", cfg.max_replaces_per_second));
+    MM_RETURN_IF_ERROR(
+        read_scalar(n, "max_actions_per_second", "risk", cfg.max_actions_per_second));
+    MM_RETURN_IF_ERROR(read_scalar(n, "burst_capacity", "risk", cfg.burst_capacity));
+    if (n) {
+        MM_RETURN_IF_ERROR(parse_symbol_risk(n["symbols"], cfg.symbols));
+    }
     MM_RETURN_IF_ERROR(read_fixed(n, "max_position", "risk", cfg.max_position));
     MM_RETURN_IF_ERROR(read_fixed(n, "max_notional", "risk", cfg.max_notional));
     MM_RETURN_IF_ERROR(read_fixed(n, "max_portfolio_notional", "risk", cfg.max_portfolio_notional));
@@ -457,6 +512,33 @@ Status EngineConfig::validate() const {
     }
     if (risk.max_quote_distance_bps <= 0) {
         return {ErrorCode::InvalidArgument, "risk.max_quote_distance_bps must be positive"};
+    }
+    if (risk.max_market_data_age_ms <= 0 || risk.max_position_age_ms <= 0) {
+        return {ErrorCode::InvalidArgument, "risk freshness limits must be positive"};
+    }
+    if (risk.max_new_orders_per_second < 0 || risk.max_cancels_per_second < 0 ||
+        risk.max_replaces_per_second < 0 || risk.max_actions_per_second < 0 ||
+        risk.burst_capacity < 0) {
+        return {ErrorCode::InvalidArgument, "risk rate limits must not be negative"};
+    }
+    {
+        std::set<std::string> seen;
+        for (const auto& sym : risk.symbols) {
+            if (!seen.insert(sym.symbol).second) {
+                return {ErrorCode::InvalidArgument, "duplicate risk symbol: " + sym.symbol};
+            }
+            if (sym.max_position.is_negative() || sym.max_order_quantity.is_negative() ||
+                sym.max_order_notional.is_negative() || sym.max_working_exposure.is_negative() ||
+                sym.max_side_exposure.is_negative() ||
+                sym.max_position_notional.is_negative()) {
+                return {ErrorCode::InvalidArgument,
+                        "risk.symbols." + sym.symbol + " limits must not be negative"};
+            }
+            if (sym.max_open_orders < 0 || sym.price_band_bps < 0) {
+                return {ErrorCode::InvalidArgument,
+                        "risk.symbols." + sym.symbol + " counts must not be negative"};
+            }
+        }
     }
 
     // Risk limits are never allowed to be negative in any mode. A negative

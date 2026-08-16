@@ -161,6 +161,70 @@ using Notional = Fixed<NotionalTag>;  ///< price x quantity, in quote currency
     return Notional::from_raw(static_cast<std::int64_t>(wide / Px::kScale));
 }
 
+/// Overflow-checked forms, for code that must *prove* an operation is safe
+/// rather than assume it.
+///
+/// `notional_of` and the arithmetic operators compute correctly for every value
+/// a real venue produces, but they narrow a 128-bit intermediate to int64
+/// without checking, and `+`/`-` wrap on overflow like any integer. That is the
+/// right trade on the hot path, where the inputs have already been validated.
+///
+/// It is the wrong trade in the risk engine, whose entire job is to refuse what
+/// it cannot show to be safe: a wrapped notional would turn an absurd order
+/// into a small one and approve it. These return false instead, and the caller
+/// fails closed.
+
+/// price x quantity with an explicit range check.
+[[nodiscard]] constexpr bool checked_notional_of(Px p, Qty q, Notional& out) noexcept {
+    const int128 wide = static_cast<int128>(p.raw()) * static_cast<int128>(q.raw());
+    const int128 scaled = wide / static_cast<int128>(Px::kScale);
+    constexpr int128 kMax = static_cast<int128>(std::numeric_limits<std::int64_t>::max());
+    constexpr int128 kMin = static_cast<int128>(std::numeric_limits<std::int64_t>::min());
+    if (scaled > kMax || scaled < kMin) {
+        return false;
+    }
+    out = Notional::from_raw(static_cast<std::int64_t>(scaled));
+    return true;
+}
+
+/// Addition that reports overflow instead of wrapping. Exposure is accumulated
+/// across an unbounded number of working orders, which is exactly where a
+/// wrapped sum would silently understate risk.
+template <class Tag>
+[[nodiscard]] constexpr bool checked_add(Fixed<Tag> a, Fixed<Tag> b, Fixed<Tag>& out) noexcept {
+    const int128 wide = static_cast<int128>(a.raw()) + static_cast<int128>(b.raw());
+    constexpr int128 kMax = static_cast<int128>(std::numeric_limits<std::int64_t>::max());
+    constexpr int128 kMin = static_cast<int128>(std::numeric_limits<std::int64_t>::min());
+    if (wide > kMax || wide < kMin) {
+        return false;
+    }
+    out = Fixed<Tag>::from_raw(static_cast<std::int64_t>(wide));
+    return true;
+}
+
+template <class Tag>
+[[nodiscard]] constexpr bool checked_sub(Fixed<Tag> a, Fixed<Tag> b, Fixed<Tag>& out) noexcept {
+    const int128 wide = static_cast<int128>(a.raw()) - static_cast<int128>(b.raw());
+    constexpr int128 kMax = static_cast<int128>(std::numeric_limits<std::int64_t>::max());
+    constexpr int128 kMin = static_cast<int128>(std::numeric_limits<std::int64_t>::min());
+    if (wide > kMax || wide < kMin) {
+        return false;
+    }
+    out = Fixed<Tag>::from_raw(static_cast<std::int64_t>(wide));
+    return true;
+}
+
+/// Absolute value that cannot trap. `abs()` on the minimum representable value
+/// is undefined for a plain negation; this saturates instead, so a caller
+/// comparing it against a limit gets a rejection rather than a crash.
+template <class Tag>
+[[nodiscard]] constexpr Fixed<Tag> saturating_abs(Fixed<Tag> v) noexcept {
+    if (v.raw() == std::numeric_limits<std::int64_t>::min()) {
+        return Fixed<Tag>::from_raw(std::numeric_limits<std::int64_t>::max());
+    }
+    return v.raw() < 0 ? Fixed<Tag>::from_raw(-v.raw()) : v;
+}
+
 /// notional / price -> quantity. Returns zero for a zero price rather than
 /// trapping; callers on the quoting path must reject a zero price upstream.
 [[nodiscard]] constexpr Qty qty_for_notional(Notional n, Px p) noexcept {

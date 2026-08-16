@@ -121,7 +121,45 @@ struct QuoteManagerConfigYaml {
     bool replenish_partial_fills = true;
 };
 
+/// Per-symbol risk bounds. Symbols are configured, never hard-coded into risk
+/// logic (Phase 7 §25).
+struct SymbolRiskConfig {
+    std::string symbol;
+    Qty max_position{};
+    Notional max_position_notional{};
+    Qty max_order_quantity{};
+    Notional max_order_notional{};
+    Qty max_working_exposure{};
+    Qty max_side_exposure{};
+    std::int32_t max_open_orders = 0;
+    /// Band around the reference price, in basis points.
+    std::int32_t price_band_bps = 0;
+};
+
 struct RiskConfig {
+    /// Whether the engine arms at all. A disarmed engine refuses every
+    /// exposure-adding action, which is the correct default for a config that
+    /// has not been reviewed.
+    bool enabled = false;
+
+    /// Per-symbol bounds. When present these are authoritative; the flat fields
+    /// below remain for the pre-Phase-7 shape and are used as the default for
+    /// symbols without their own entry.
+    std::vector<SymbolRiskConfig> symbols;
+
+    // ---- freshness ----
+    std::int64_t max_market_data_age_ms = 500;
+    std::int64_t max_position_age_ms = 5'000;
+
+    // ---- rate limits ----
+    std::int32_t max_new_orders_per_second = 0;
+    std::int32_t max_cancels_per_second = 0;
+    std::int32_t max_replaces_per_second = 0;
+    std::int32_t max_actions_per_second = 0;
+    /// Burst allowance. A market-data burst legitimately produces a cluster of
+    /// actions; the bucket absorbs it while bounding the sustained rate.
+    std::int32_t burst_capacity = 0;
+
     // Position and exposure
     Qty max_position{};              ///< absolute, per symbol
     Notional max_notional{};         ///< absolute, per symbol
