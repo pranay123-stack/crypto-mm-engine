@@ -37,6 +37,7 @@ EngineConfig load_ok(const char* yaml) {
 
 TEST(Config, DefaultsToPaper) {
     const auto cfg = load_ok(R"YAML(
+exchange: { name: testvenue }
 symbols: [BTCUSDT]
 strategy: { name: test_v1 }
 )YAML");
@@ -96,6 +97,7 @@ TEST(Config, FixedPointFieldsAreParsedExactly) {
     // Read as text and parsed exactly. Going through a double would turn 0.1
     // into 0.09999999999999999 and make every position limit slightly wrong.
     const auto cfg = load_ok(R"YAML(
+exchange: { name: testvenue }
 symbols: [BTCUSDT]
 strategy: { name: t }
 risk:
@@ -107,6 +109,7 @@ risk:
 
 TEST(Config, StrategyParamsAreFlattened) {
     const auto cfg = load_ok(R"YAML(
+exchange: { name: testvenue }
 symbols: [BTCUSDT]
 strategy:
   name: t
@@ -133,6 +136,7 @@ strategy:
 // failure mode a risk system exists to prevent.
 TEST(Config, UnknownKeyIsRejected) {
     const auto r = load_config_string(R"YAML(
+exchange: { name: testvenue }
 symbols: [BTCUSDT]
 strategy: { name: t }
 risk:
@@ -144,7 +148,7 @@ risk:
 }
 
 TEST(Config, UnknownTopLevelKeyIsRejected) {
-    const auto r = load_config_string("symbols: [BTCUSDT]\nstrategy: {name: t}\nbacktest: {}\n");
+    const auto r = load_config_string("exchange: {name: v}\nsymbols: [BTCUSDT]\nstrategy: {name: t}\nbacktest: {}\n");
     ASSERT_TRUE(r.is_error());
     EXPECT_NE(r.status().message().find("backtest"), std::string_view::npos);
 }
@@ -156,7 +160,7 @@ TEST(Config, RejectsMalformedYaml) {
 }
 
 TEST(Config, RejectsUnknownMode) {
-    const auto r = load_config_string("mode: production\nsymbols: [BTCUSDT]\nstrategy: {name: t}");
+    const auto r = load_config_string("mode: production\nexchange: {name: v}\nsymbols: [BTCUSDT]\nstrategy: {name: t}");
     ASSERT_TRUE(r.is_error());
     EXPECT_EQ(r.status().code(), ErrorCode::InvalidArgument);
 }
@@ -168,9 +172,18 @@ TEST(Config, RejectsEmptySymbolList) {
 }
 
 TEST(Config, RejectsDuplicateSymbols) {
-    const auto r = load_config_string("symbols: [BTCUSDT, BTCUSDT]\nstrategy: {name: t}");
+    const auto r = load_config_string("exchange: {name: v}\nsymbols: [BTCUSDT, BTCUSDT]\nstrategy: {name: t}");
     ASSERT_TRUE(r.is_error());
     EXPECT_NE(r.status().message().find("duplicate"), std::string_view::npos);
+}
+
+TEST(Config, RequiresAnExplicitVenue) {
+    // The core carries no default venue: defaulting to one would bake an
+    // adapter's identity into code that must stay valid with every adapter
+    // removed. See tools/check_exchange_boundary.py.
+    const auto r = load_config_string("symbols: [BTCUSDT]\nstrategy: {name: t}");
+    ASSERT_TRUE(r.is_error());
+    EXPECT_NE(r.status().message().find("exchange.name"), std::string_view::npos);
 }
 
 TEST(Config, RejectsMissingStrategyName) {
@@ -181,6 +194,7 @@ TEST(Config, RejectsMissingStrategyName) {
 
 TEST(Config, RejectsNegativeRiskLimits) {
     const auto r = load_config_string(R"YAML(
+exchange: { name: testvenue }
 symbols: [BTCUSDT]
 strategy: { name: t }
 risk:
@@ -192,6 +206,7 @@ risk:
 
 TEST(Config, RejectsInconsistentOrderCountLimits) {
     const auto r = load_config_string(R"YAML(
+exchange: { name: testvenue }
 symbols: [BTCUSDT]
 strategy: { name: t }
 risk:
@@ -203,6 +218,7 @@ risk:
 
 TEST(Config, RejectsOutOfRangePaperProbabilities) {
     const auto r = load_config_string(R"YAML(
+exchange: { name: testvenue }
 symbols: [BTCUSDT]
 strategy: { name: t }
 paper:
@@ -216,7 +232,7 @@ paper:
 // ---------------------------------------------------------------------------
 
 TEST(ConfigLiveGates, PaperModeNeedsNoGates) {
-    const auto cfg = load_ok("symbols: [BTCUSDT]\nstrategy: {name: t}");
+    const auto cfg = load_ok("exchange: {name: v}\nsymbols: [BTCUSDT]\nstrategy: {name: t}");
     EXPECT_TRUE(cfg.validate_live_gates(false).is_ok());
 }
 
@@ -300,7 +316,7 @@ TEST(Config, ConfigFileNotFound) {
 }
 
 TEST(Config, FindSymbol) {
-    const auto cfg = load_ok("symbols: [BTCUSDT, ETHUSDT]\nstrategy: {name: t}");
+    const auto cfg = load_ok("exchange: {name: v}\nsymbols: [BTCUSDT, ETHUSDT]\nstrategy: {name: t}");
     ASSERT_NE(cfg.find_symbol("ETHUSDT"), nullptr);
     EXPECT_EQ(cfg.find_symbol("ETHUSDT")->symbol, "ETHUSDT");
     EXPECT_EQ(cfg.find_symbol("SOLUSDT"), nullptr);

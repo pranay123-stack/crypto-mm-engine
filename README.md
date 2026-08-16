@@ -8,11 +8,13 @@ parameter optimization, and no alpha research. The separate quant research
 platform owns those and hands this one a finalized strategy module plus its
 validated parameters.
 
-> **Status: PHASE 2 OF 16 COMPLETE — NOT PRODUCTION READY.**
-> The architecture, build system, and core infrastructure layer are implemented,
-> tested, and benchmarked. Market data, order book, strategy runtime, quoting,
-> risk, OMS, execution, portfolio, reconciliation, monitoring and deployment are
-> designed but **not yet implemented**. See [Status](#status) for the exact line.
+> **Status: PHASE 3 OF 16 COMPLETE — NOT PRODUCTION READY.**
+> The architecture, build system, core infrastructure and the exchange
+> abstraction layer are implemented, tested, and benchmarked. **No real venue
+> adapter exists yet** — only a deterministic mock. Binance market data, order
+> book, strategy runtime, quoting, risk, OMS, execution, portfolio,
+> reconciliation, monitoring and deployment are designed but **not yet
+> implemented**. See [Status](#status) for the exact line.
 
 ---
 
@@ -137,6 +139,7 @@ strategy:
 | [architecture.md](docs/architecture.md)         | layers, module graph, boundaries, events  |
 | [concurrency.md](docs/concurrency.md)           | threads, ownership, memory ordering       |
 | [state-machines.md](docs/state-machines.md)     | order, session, book, and system states   |
+| [exchange-interface.md](docs/exchange-interface.md) | adapter contract, unknown-state semantics |
 | [benchmarks.md](docs/benchmarks.md)             | measured numbers and what they imply      |
 
 ## Status
@@ -154,9 +157,19 @@ Implemented and verified:
 
   136 tests, clean under `-Werror`, ASan+UBSan, and TSan. 17 benchmarks.
 
+- **Phase 3 — Exchange abstraction.** `IExchangeMarketData` / `IExchangeExecution`
+  and their sinks, normalized events, order requests with venue-rule validation,
+  a capability model, and an explicit failure model whose central property is
+  that *a request that failed is never confused with a request the venue
+  refused*. A deterministic mock adapter implements both interfaces.
+
+  279 tests, 24 benchmarks. The venue boundary is enforced mechanically by
+  `tools/check_exchange_boundary.py`, wired into `ctest`: no core file may name
+  a venue or include an adapter header.
+
 Not yet implemented — every one of these is currently absent, not partial:
 
-Phase 3 exchange abstraction · Phase 4 Binance market data · Phase 5 strategy
+Phase 4 Binance market data · Phase 5 strategy
 runtime · Phase 6 quote manager · Phase 7 risk engine · Phase 8 OMS · Phase 9
 paper execution · Phase 10 portfolio/PnL · Phase 11 reconciliation & recovery ·
 Phase 12 Binance live execution · Phase 13 operations dashboard · Phase 14

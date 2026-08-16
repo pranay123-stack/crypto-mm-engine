@@ -97,38 +97,74 @@ rejected rather than ignored.
 
 ---
 
-## 2. Market-data session (owned by `market_data/`)
+## 2. Session state (owned by `exchange/common/`)
+
+Implemented as `mm::exchange::SessionState`, validated by `is_legal_transition`,
+and shared by market-data and execution sessions. This is the **only** session
+machine in the platform.
 
 ```
-   ┌──────────────┐  connect  ┌────────────┐  ws upgrade  ┌────────────┐
-   │ DISCONNECTED │──────────►│ CONNECTING │─────────────►│ SUBSCRIBED │
-   └──────▲───────┘           └─────┬──────┘              └─────┬──────┘
-          │                         │ fail                      │ first buffered
-          │                         ▼                           │ update
-          │                  ┌────────────┐              ┌──────▼─────┐
-          │                  │ BACKOFF    │              │ SYNCING    │
-          │                  └─────┬──────┘              └──────┬─────┘
-          │  socket error / no     │ expire                     │ snapshot applied
-          │  heartbeat / stale ◄───┘                            │ + gap-free
-          │                                                ┌────▼────┐
-          └────────────────────────────────────────────────│ SYNCED  │
-                                                           └────┬────┘
-                                                                │ gap / invalid
-                                                          ┌─────▼────┐
-                                                          │ RESYNC   │──► SYNCING
-                                                          └──────────┘
+   Disconnected ──► Connecting ──► Connected ──┬──► Authenticated ──┐
+        ▲                │                     │                    │
+        │                │                     └────────────────────┤
+        │                ▼                                          ▼
+        │            Backoff ◄───────────────────────────────── Subscribed
+        │                │                                          │
+        │                └──► Connecting                            ▼
+        │                                                        Syncing
+        │                                                       ▲     │
+        │                                    ResyncRequired ────┘     ▼
+        │                                          ▲            ┌── Ready ──┐
+        │                                          └────────────┤           │
+        │                                                       └── Stale ◄─┘
+        └───────────────────────── (from any state) ──────────────────┘
+                        Error ◄── (from any state, operator-clear only)
 ```
 
-Only `SYNCED` permits quoting. Every other state forces SAFE_MODE for that
-symbol. Reconnect uses exponential backoff with jitter (200 ms → 30 s cap) to
-avoid synchronized reconnect storms against the venue after a shared outage.
+Only `Ready` permits quoting, expressed as the single predicate
+`is_quotable(state)`. Every other state suspends quoting for the affected
+symbol.
 
-Heartbeat: Binance sends a ping every ~3 min; the client must pong. Independently
-the session tracks *data* liveness — a socket that is open but silent for
-`max_market_data_age_ms` is treated as dead, because a TCP connection that
-survives while data stops is the failure mode that actually loses money.
+| State | Meaning |
+| --- | --- |
+| `Disconnected` | No transport. |
+| `Connecting` | Dialling / TLS handshake. |
+| `Connected` | Transport up, nothing subscribed. |
+| `Authenticated` | Credentials accepted — private streams only; public market data skips it. |
+| `Subscribed` | Venue confirmed the subscription; updates are being buffered. |
+| `Syncing` | Applying a snapshot and reconciling buffered updates. |
+| `Ready` | Gap-free, fresh, internally consistent. **Quotable.** |
+| `Stale` | Socket alive but data too old to trust. |
+| `ResyncRequired` | Sequence gap or invariant violation; book discarded. |
+| `Backoff` | Waiting before a reconnect attempt. |
+| `Error` | Unrecoverable without operator action. |
 
----
+### Illegal transitions that matter
+
+These are rejected, not merely discouraged, and each has a test:
+
+- **`Subscribed → Ready`.** A subscription says nothing about whether a snapshot
+  has been applied. Allowing it would let a strategy quote against an empty book.
+- **`ResyncRequired → Ready`.** Recovery must pass back through `Syncing`.
+- **`Error → anything but Disconnected`,** including `Backoff`. Otherwise
+  `Error → Backoff → Connecting → … → Ready` would let an unrecoverable session
+  quietly retry its way back to trading.
+- **`Disconnected → Backoff`.** From there the next step is an attempt, not a wait.
+
+Self-transitions are legal and idempotent: adapters legitimately re-announce
+state after a heartbeat, and treating that as a violation would produce noise
+rather than safety.
+
+### Staleness
+
+`Stale` earns its place because a socket that stays open while data stops is the
+failure mode that loses money quietly — the book looks fine and is minutes old.
+`IExchangeMarketData::data_age_ns()` is the detector, compared against
+`safety.max_market_data_age_ms`. A symbol that has never produced data reports
+`Nanos::max()`, not zero: a silent symbol must never look healthy.
+
+Reconnect uses exponential backoff with jitter (200 ms → 30 s cap) to avoid
+synchronized reconnect storms against the venue after a shared outage.
 
 ## 3. Book synchronization (owned by `orderbook/` + `market_data/`)
 

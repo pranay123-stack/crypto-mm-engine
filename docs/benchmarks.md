@@ -98,10 +98,49 @@ measures nothing is worse than no benchmark: it produces a number people trust.
 Any new benchmark reporting a sub-nanosecond time for non-trivial work should be
 assumed broken until proven otherwise.
 
+## Phase 3 — exchange boundary
+
+Same machine and build. Only the four operations that run per-event on the
+trading thread are measured; the rest of the exchange layer runs on an I/O
+thread or at startup, and a number nobody acts on is noise.
+
+| Benchmark | Time | Notes |
+| --- | --- | --- |
+| `ValidateOrder` (accepting) | 29.4 ns | full tick/lot/notional/band/capability check |
+| `ValidateOrder` (rejecting) | 44.3 ns | see below |
+| `ValidateExecutionEvent` | 11.1 ns | self-contradiction check on every inbound event |
+| `ExecutionEventThroughRing` | 15.6 ns | 680-byte envelope, same thread |
+| `MarketDataEventThroughRing` | 21.7 ns | 624-byte envelope, 16-level depth update |
+| `TradeEventThroughRing` | 22.8 ns | 60 bytes of payload in the same 624-byte slot |
+| `SessionTransitionCheck` | 2.81 ns | not hot; measured to confirm it is not accidentally costly |
+
+Two results worth reading carefully:
+
+**The rejecting path is 50% slower than the accepting one (44.3 ns vs 29.4 ns),
+which is the opposite of what short-circuiting suggests.** The cause is
+`ExchangeError`'s detail string: acceptance returns `ExchangeError::none()` and
+copies nothing, while every rejection copies a message into an
+`InlineString<128>`. It is the right trade — a diagnosable rejection is worth
+15 ns — but it means a *burst* of rejections costs more than a burst of
+acceptances, which is relevant to the safety layer's reject-rate detector.
+
+**A trade costs the same as a depth update (22.8 ns vs 21.7 ns)** because both
+copy the full 624-byte envelope regardless of payload. That is the measured
+price of the single-ordered-ring decision described in
+[exchange-interface.md §6](exchange-interface.md): a trade and the depth update
+it caused stay in venue order without the trading thread re-interleaving two
+streams. Paid knowingly.
+
+Envelope sizing was itself driven by measurement rather than taste. At
+`kMaxOrdersPerSnapshotEvent = 8` the `ExecutionEvent` union was 1432 bytes, so
+every 224-byte fill paid a 6× copy tax for a payload that only appears during
+reconciliation. Reducing the chunk to 4 and removing a redundant `error` field
+brought it to 680 bytes.
+
 ## Not yet benchmarked
 
 These arrive with their phases and are listed so the gaps are explicit:
 
 order-book apply/snapshot · market-state generation · strategy invocation ·
 quote-decision diffing · risk validation · OMS state transition · order
-serialization · end-to-end tick-to-trade.
+serialization (venue encode/decode) · end-to-end tick-to-trade.

@@ -168,6 +168,28 @@ mmx_add_module(mm_common
   DEPS    Threads::Threads spdlog::spdlog fmt::fmt yaml-cpp::yaml-cpp
 )
 
+# L0a - exchange interfaces and normalized types.
+#
+# Links mm_common and NOTHING ELSE. That single line is what keeps venue
+# details out of the core: an adapter cannot become a dependency of the
+# interfaces it implements.
+file(GLOB_RECURSE MM_EXCHANGE_SRC CONFIGURE_DEPENDS "src/exchange/common/*.cpp")
+mmx_add_module(mm_exchange
+  SOURCES ${MM_EXCHANGE_SRC}
+  DEPS    mm_common
+)
+
+# Mock adapter - a reference implementation of both interfaces, used by tests
+# and benchmarks. It is a peer of the future Binance adapter, not a special
+# case, which is what makes it evidence that the abstraction is implementable.
+file(GLOB_RECURSE MM_EXCHANGE_MOCK_SRC CONFIGURE_DEPENDS "src/exchange/mock/*.cpp")
+if(MM_EXCHANGE_MOCK_SRC)
+  mmx_add_module(mm_exchange_mock
+    SOURCES ${MM_EXCHANGE_MOCK_SRC}
+    DEPS    mm_exchange
+  )
+endif()
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -204,7 +226,21 @@ if(MMX_BUILD_TESTS)
     set_tests_properties(${suite} PROPERTIES TIMEOUT 300)
   endfunction()
 
-  mmx_add_test_suite(unit mm_common)
+  mmx_add_test_suite(unit mm_common mm_exchange mm_exchange_mock)
+  mmx_add_test_suite(architecture mm_common mm_exchange mm_exchange_mock)
+
+  # Acceptance tests B and F are source-level properties, not runtime ones:
+  # no core file may name a venue or include an adapter header. Enforced here
+  # so the boundary cannot erode between reviews.
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME exchange_boundary
+             COMMAND ${Python3_EXECUTABLE}
+                     "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_exchange_boundary.py")
+    set_tests_properties(exchange_boundary PROPERTIES TIMEOUT 60)
+  else()
+    message(WARNING "Python3 not found - the exchange boundary check will not run")
+  endif()
 endif()
 
 # ---------------------------------------------------------------------------
@@ -216,7 +252,7 @@ if(MMX_BUILD_BENCH)
     file(GLOB_RECURSE MM_BENCH_SRC CONFIGURE_DEPENDS "benchmarks/*.cpp")
     if(MM_BENCH_SRC)
       add_executable(mm_bench ${MM_BENCH_SRC})
-      target_link_libraries(mm_bench PRIVATE mm_common benchmark::benchmark)
+      target_link_libraries(mm_bench PRIVATE mm_common mm_exchange mm_exchange_mock benchmark::benchmark)
     endif()
   else()
     message(STATUS "Google Benchmark not found - benchmarks disabled")
