@@ -222,9 +222,29 @@ of the watchdog rather than of the strategy.
 the engine can ask whether an evaluation is worth assembling a context for
 before assembling one.
 
+## Phase 6 — quote manager
+
+| Benchmark | Time | Notes |
+| --- | --- | --- |
+| `EvaluateRejected` | 85.6 ns | screening only; no slot considered |
+| `DisableAllQuotes` | 89.2 ns | the withdrawal path behind every kill switch |
+| `EvaluateNew` | 143 ns | validation plus two New actions |
+| **`EvaluateKeep`** | **152 ns** | **the steady state — quotes rest, nothing material moved** |
+| `EvaluateReplace` | 325 ns | full validation on both sides plus two actions |
+
+`EvaluateKeep` is the number that matters: it is what the trading thread pays on
+the large majority of evaluations, when the market has not moved enough to
+justify rewriting anything. Replace costs roughly twice that because it re-runs
+Phase 3 validation on both sides and constructs two actions.
+
+Together with Phase 5, one full strategy-to-action cycle in the steady state
+costs about 280 ns (132 ns runtime + 152 ns quote manager) — against a
+cross-thread ring hop of 40 ns and a network path measured in tens of
+microseconds.
+
 ## Not yet benchmarked
 
 These arrive with their phases and are listed so the gaps are explicit:
 
-quote-decision diffing · risk validation · OMS state transition · order
-serialization · end-to-end tick-to-trade.
+risk validation · OMS state transition · order serialization · end-to-end
+tick-to-trade.

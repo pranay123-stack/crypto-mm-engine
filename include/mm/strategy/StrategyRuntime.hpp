@@ -138,6 +138,11 @@ public:
     /// Last fault message, for the operator. Empty when not faulted.
     [[nodiscard]] std::string_view fault_reason() const noexcept { return fault_reason_.view(); }
 
+    /// The generation stamped on the most recent intent. Monotonic across the
+    /// runtime's lifetime, including across faults and pauses: reusing a
+    /// generation would let a stale intent masquerade as a current one.
+    [[nodiscard]] std::uint64_t generation() const noexcept { return generation_; }
+
     /// Applies the gates without calling the strategy. Exposed so the engine
     /// can decide whether an evaluation is worth assembling a context for.
     [[nodiscard]] SkipReason gate(const StrategyContext& context) const;
@@ -158,6 +163,7 @@ private:
     InstrumentSpec instrument_{};
     bool instrument_loaded_ = false;
 
+    std::uint64_t generation_ = 0;
     std::int32_t consecutive_budget_violations_ = 0;
     std::int32_t consecutive_invalid_outputs_ = 0;
     InlineString<160> fault_reason_{};
