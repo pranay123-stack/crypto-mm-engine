@@ -48,6 +48,18 @@ strategies:
     inventory_skew_bps: 8.0
     max_inventory_utilisation: 0.9
 
+# Quote-manager infrastructure controls. These decide WHETHER a resting order is
+# worth rewriting -- never what price or size to write, which is the strategy's.
+quote:
+  max_intent_age_ms: 250
+  max_market_data_age_ms: 500
+  min_price_move_ticks: 1
+  min_quantity_move_fraction: 0.0
+  min_replace_interval_ms: 0
+  cooldown_after_cancel_ms: 0
+  assume_request_lost_after_ms: 1000
+  replenish_partial_fills: true
+
 risk:
   max_position: 0.05
   max_notional: 5000

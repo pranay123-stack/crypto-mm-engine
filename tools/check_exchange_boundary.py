@@ -36,6 +36,26 @@ NEUTRAL_ADAPTER_SUBDIR = "exchange/common/"
 # reach the exchange" is a hope rather than a property.
 STRATEGY_DIRS = ("strategies/", "include/mm/strategy/", "src/strategy/")
 
+# The quote manager translates intent into desired order state. It must not
+# contain exchange code, risk logic or order management -- those are separate
+# layers with separate mandates, and merging any of them here would put the
+# decision "is this safe?" in the component that decides "what do we want?".
+QUOTE_DIRS = ("include/mm/quote/", "src/quote/")
+QUOTE_FORBIDDEN_INCLUDES = [
+    ("boost/asio", "networking"),
+    ("boost/beast", "HTTP/WebSocket"),
+    ("openssl/", "TLS and signing"),
+    ("nlohmann/json", "venue wire formats"),
+    ("mm/exchange/binance/", "a venue adapter"),
+    ("mm/exchange/mock/", "a venue adapter"),
+    ("mm/exchange/paper/", "an execution adapter"),
+    ("mm/oms/", "order management"),
+    ("mm/execution/", "order execution"),
+    ("mm/risk/", "risk decisions"),
+    ("strategies/", "a strategy implementation"),
+    ("curl/", "networking"),
+]
+
 # Headers a strategy must never pull in. Each represents a capability the
 # strategy boundary exists to withhold.
 STRATEGY_FORBIDDEN_INCLUDES = [
@@ -134,6 +154,10 @@ def is_strategy_file(rel: str) -> bool:
     return any(rel.startswith(d) for d in STRATEGY_DIRS)
 
 
+def is_quote_file(rel: str) -> bool:
+    return any(rel.startswith(d) for d in QUOTE_DIRS)
+
+
 def is_adapter_file(rel: str) -> bool:
     """True for files inside a venue adapter directory (not exchange/common)."""
     if NEUTRAL_ADAPTER_SUBDIR in rel:
@@ -192,6 +216,19 @@ def scan() -> int:
                         violations.append(
                             f"{rel}:{lineno}: strategy code includes '{needle}' "
                             f"({capability}); the strategy boundary exists to withhold it"
+                        )
+
+        # --- Quote manager: no exchange, risk or OMS code ------------------
+        if is_quote_file(rel):
+            for lineno, line in enumerate(code.splitlines(), 1):
+                stripped = line.strip()
+                if not stripped.startswith("#include"):
+                    continue
+                for needle, capability in QUOTE_FORBIDDEN_INCLUDES:
+                    if needle in stripped:
+                        violations.append(
+                            f"{rel}:{lineno}: quote manager includes '{needle}' "
+                            f"({capability}); that decision belongs to another layer"
                         )
 
         # --- Test F: no venue identifiers outside adapter directories ----
@@ -258,6 +295,20 @@ def self_test() -> int:
         '#include "mm/oms/OrderStore.hpp"',
         '#include "mm/risk/RiskEngine.hpp"',
     ]
+    quote_must_detect = [
+        '#include "mm/risk/RiskEngine.hpp"',
+        '#include "mm/oms/OrderStore.hpp"',
+        '#include "mm/exchange/binance/BinanceMarketData.hpp"',
+        '#include <boost/beast/websocket.hpp>',
+        '#include "strategies/reference_mm_v1/ReferenceMarketMaker.hpp"',
+    ]
+    quote_must_ignore = [
+        '#include "mm/strategy/QuoteIntent.hpp"',
+        '#include "mm/exchange/common/OrderRequest.hpp"',
+        '#include "mm/exchange/common/ExchangeCapabilities.hpp"',
+        '#include "mm/common/Time.hpp"',
+    ]
+
     strategy_must_ignore = [
         '#include "mm/strategy/IStrategy.hpp"',
         '#include "mm/common/Types.hpp"',
@@ -291,20 +342,34 @@ def self_test() -> int:
             return False
         return any(needle in stripped for needle, _ in STRATEGY_FORBIDDEN_INCLUDES)
 
+    def quote_forbidden_hit(line: str) -> bool:
+        stripped = line.strip()
+        if not stripped.startswith("#include"):
+            return False
+        return any(needle in stripped for needle, _ in QUOTE_FORBIDDEN_INCLUDES)
+
     for line in strategy_must_detect:
         if not forbidden_hit(line):
             failures.append(f"missed a forbidden strategy include: {line}")
     for line in strategy_must_ignore:
         if forbidden_hit(line):
             failures.append(f"false positive on a permitted strategy include: {line}")
+    for line in quote_must_detect:
+        if not quote_forbidden_hit(line):
+            failures.append(f"missed a forbidden quote-manager include: {line}")
+    for line in quote_must_ignore:
+        if quote_forbidden_hit(line):
+            failures.append(f"false positive on a permitted quote include: {line}")
 
     if failures:
         print("SELF-TEST FAILED:")
         for f in failures:
             print(f"  {f}")
         return 1
-    print(f"self-test: {len(must_detect) + len(strategy_must_detect)} detections and "
-          f"{len(must_ignore) + len(strategy_must_ignore)} non-detections behave as expected")
+    print(f"self-test: {len(must_detect) + len(strategy_must_detect) + len(quote_must_detect)} "
+          f"detections and "
+          f"{len(must_ignore) + len(strategy_must_ignore) + len(quote_must_ignore)} "
+          f"non-detections behave as expected")
     return 0
 
 

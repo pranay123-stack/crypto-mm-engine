@@ -90,6 +90,37 @@ struct StrategyConfig {
     Params params;
 };
 
+/// Infrastructure controls for the quote manager (Phase 6 §29).
+///
+/// Deliberately separate from `strategies.<name>`: these bound how the
+/// infrastructure behaves, not what the strategy wants. They decide *whether*
+/// an order is worth rewriting, never *what* to write -- encoding strategy
+/// behaviour here would make the strategy's stated quotes a fiction.
+struct QuoteManagerConfigYaml {
+    /// An intent older than this is not acted on, and resting quotes are
+    /// withdrawn: intent describes a market that existed at a moment.
+    std::int64_t max_intent_age_ms = 250;
+    /// Market data older than this withdraws quotes regardless of intent.
+    std::int64_t max_market_data_age_ms = 500;
+
+    /// Smallest price difference, in ticks, worth a replacement. One means any
+    /// tick of movement is material.
+    std::int32_t min_price_move_ticks = 1;
+    /// Smallest quantity difference, as a fraction of the desired quantity,
+    /// worth a replacement. Zero means any difference is material.
+    double min_quantity_move_fraction = 0.0;
+    /// Minimum interval between replacements of the same quote.
+    std::int64_t min_replace_interval_ms = 0;
+    /// Quiet period after a cancel before the same side may be re-quoted.
+    std::int64_t cooldown_after_cancel_ms = 0;
+    /// How long to wait for the OMS to reflect a request already issued before
+    /// assuming it was lost. Prevents one order per evaluation cycle.
+    std::int64_t assume_request_lost_after_ms = 1'000;
+
+    /// Replace a partially filled order to restore the intended resting size.
+    bool replenish_partial_fills = true;
+};
+
 struct RiskConfig {
     // Position and exposure
     Qty max_position{};              ///< absolute, per symbol
@@ -186,6 +217,7 @@ struct EngineConfig {
     ExchangeConfig exchange;
     std::vector<SymbolConfig> symbols;
     StrategyConfig strategy;
+    QuoteManagerConfigYaml quote;
     /// Parameter blocks for every strategy present in the file, keyed by name.
     /// Only the selected strategy's block is merged into `strategy.params`;
     /// the rest are kept so a config can carry several and switch between them

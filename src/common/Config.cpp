@@ -212,6 +212,29 @@ Status parse_strategy_params(const YAML::Node& n,
     return Status::ok();
 }
 
+Status parse_quote(const YAML::Node& n, QuoteManagerConfigYaml& cfg) {
+    MM_RETURN_IF_ERROR(check_known_keys(
+        n, "quote",
+        {"max_intent_age_ms", "max_market_data_age_ms", "min_price_move_ticks",
+         "min_quantity_move_fraction", "min_replace_interval_ms", "cooldown_after_cancel_ms",
+         "assume_request_lost_after_ms", "replenish_partial_fills"}));
+    MM_RETURN_IF_ERROR(read_scalar(n, "max_intent_age_ms", "quote", cfg.max_intent_age_ms));
+    MM_RETURN_IF_ERROR(
+        read_scalar(n, "max_market_data_age_ms", "quote", cfg.max_market_data_age_ms));
+    MM_RETURN_IF_ERROR(read_scalar(n, "min_price_move_ticks", "quote", cfg.min_price_move_ticks));
+    MM_RETURN_IF_ERROR(
+        read_scalar(n, "min_quantity_move_fraction", "quote", cfg.min_quantity_move_fraction));
+    MM_RETURN_IF_ERROR(
+        read_scalar(n, "min_replace_interval_ms", "quote", cfg.min_replace_interval_ms));
+    MM_RETURN_IF_ERROR(
+        read_scalar(n, "cooldown_after_cancel_ms", "quote", cfg.cooldown_after_cancel_ms));
+    MM_RETURN_IF_ERROR(
+        read_scalar(n, "assume_request_lost_after_ms", "quote", cfg.assume_request_lost_after_ms));
+    MM_RETURN_IF_ERROR(
+        read_scalar(n, "replenish_partial_fills", "quote", cfg.replenish_partial_fills));
+    return Status::ok();
+}
+
 Status parse_risk(const YAML::Node& n, RiskConfig& cfg) {
     MM_RETURN_IF_ERROR(check_known_keys(
         n, "risk",
@@ -384,6 +407,21 @@ Status EngineConfig::validate() const {
         strategy.max_consecutive_invalid_outputs <= 0) {
         return {ErrorCode::InvalidArgument, "strategy fault thresholds must be positive"};
     }
+    if (quote.max_intent_age_ms <= 0 || quote.max_market_data_age_ms <= 0) {
+        return {ErrorCode::InvalidArgument, "quote freshness limits must be positive"};
+    }
+    if (quote.min_price_move_ticks <= 0) {
+        // Zero would make every evaluation a replacement, since any price is
+        // "at least zero ticks" away from any other.
+        return {ErrorCode::InvalidArgument, "quote.min_price_move_ticks must be positive"};
+    }
+    if (quote.min_quantity_move_fraction < 0.0 || quote.min_quantity_move_fraction > 1.0) {
+        return {ErrorCode::InvalidArgument, "quote.min_quantity_move_fraction must be in [0, 1]"};
+    }
+    if (quote.min_replace_interval_ms < 0 || quote.cooldown_after_cancel_ms < 0 ||
+        quote.assume_request_lost_after_ms < 0) {
+        return {ErrorCode::InvalidArgument, "quote intervals must not be negative"};
+    }
     if (strategy.max_quote_distance_bps <= 0) {
         return {ErrorCode::InvalidArgument, "strategy.max_quote_distance_bps must be positive"};
     }
@@ -521,7 +559,7 @@ Result<EngineConfig> load_config_string(const std::string& yaml_text) {
     MM_RETURN_IF_ERROR_RESULT(check_known_keys(
         root, "",
         {"mode", "session_name", "exchange", "symbols", "strategy", "risk", "execution", "safety",
-         "paper", "monitoring", "persistence", "logging", "io", "strategies"}));
+         "paper", "monitoring", "persistence", "logging", "io", "strategies", "quote"}));
 
     EngineConfig cfg;
 
@@ -551,6 +589,7 @@ Result<EngineConfig> load_config_string(const std::string& yaml_text) {
             }
         }
     }
+    MM_RETURN_IF_ERROR_RESULT(parse_quote(root["quote"], cfg.quote));
     MM_RETURN_IF_ERROR_RESULT(parse_risk(root["risk"], cfg.risk));
     MM_RETURN_IF_ERROR_RESULT(parse_execution(root["execution"], cfg.execution));
     MM_RETURN_IF_ERROR_RESULT(parse_safety(root["safety"], cfg.safety));

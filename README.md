@@ -8,12 +8,12 @@ parameter optimization, and no alpha research. The separate quant research
 platform owns those and hands this one a finalized strategy module plus its
 validated parameters.
 
-> **Status: PHASE 5 OF 16 COMPLETE — NOT PRODUCTION READY.**
-> Market data works end to end and a strategy can now be plugged in: the Binance
-> adapter synchronizes a real book from live public data, and a finalized
-> strategy runs inside a runtime that gates, times, contains and validates it.
-> **Nothing can place an order** — no risk engine, no quote manager, no OMS and
-> no execution path exists yet. See [Status](#status) for the exact line.
+> **Status: PHASE 6 OF 16 COMPLETE — NOT PRODUCTION READY.**
+> The pipeline now runs from live market data to normalized order actions: the
+> Binance adapter synchronizes a real book, a finalized strategy runs inside a
+> runtime that contains and validates it, and the quote manager turns its intent
+> into a desired working-order state. **Nothing can place an order** — no risk
+> engine, no OMS and no execution path exists yet. See [Status](#status).
 
 ---
 
@@ -142,6 +142,7 @@ strategy:
 | [binance-market-data.md](docs/binance-market-data.md) | streams, normalization, reconnect, threading |
 | [order-book.md](docs/order-book.md)             | book, invariants, synchronization algorithm |
 | [strategy-runtime.md](docs/strategy-runtime.md) | plug-in contract, lifecycle, replacement, failure behaviour |
+| [quote-manager.md](docs/quote-manager.md)       | diff algorithm, ownership, generations, churn controls |
 | [benchmarks.md](docs/benchmarks.md)             | measured numbers and what they imply      |
 
 ## Status
@@ -190,9 +191,19 @@ Implemented and verified:
   exists to validate the runtime — it is not a trading strategy and makes no
   profitability claim.
 
+- **Phase 6 — Quote manager.** Deterministic diffing of desired quote state
+  against working orders into New/Cancel/Replace/Keep actions, with monotonic
+  generation ordering, idempotency, explicit order ownership, conservative
+  handling of unknown order state, partial-fill replenishment, and configurable
+  churn controls that decide *whether* to rewrite an order but never *what* to
+  write.
+
+  505 tests, 43 benchmarks. It contains no risk logic, no order management and
+  no exchange code, enforced by the boundary checker.
+
 Not yet implemented — every one of these is currently absent, not partial:
 
-Phase 6 quote manager · Phase 7 risk engine · Phase 8 OMS · Phase 9
+Phase 7 risk engine · Phase 8 OMS · Phase 9
 paper execution · Phase 10 portfolio/PnL · Phase 11 reconciliation & recovery ·
 Phase 12 Binance live execution · Phase 13 operations dashboard · Phase 14
 failure hardening · Phase 15 performance hardening · Phase 16 deployment.

@@ -175,6 +175,12 @@ EvaluationResult StrategyRuntime::skipped(SkipReason reason) {
     // cannot evaluate, the safe expression of that is "stand down".
     result.intent = QuoteIntent::pull(IntentReason::Normal);
     result.intent.identity = identity_;
+    // Stamped AFTER the Pull is constructed. A gated Pull is still a current
+    // statement about what should happen, and downstream orders intents by
+    // generation -- one left at zero would be read as ancient and ignored,
+    // silently defeating the withdrawal it was supposed to express.
+    result.intent.generation = ++generation_;
+    result.intent.computed_ns = clock_.steady();
     return result;
 }
 
@@ -355,6 +361,10 @@ EvaluationResult StrategyRuntime::evaluate(const StrategyContext& context) {
     // strategy that got its own version wrong would corrupt attribution.
     intent.identity = identity_;
     intent.identity.config_generation = context.config_generation;
+    // Advances on every evaluation, never reused, never reset -- including
+    // across faults and pauses, since a repeated generation would let a stale
+    // intent masquerade as a current one downstream.
+    intent.generation = ++generation_;
     intent.computed_ns = clock_.steady();
     if (intent.market_sequence == kNoSeq) {
         intent.market_sequence = context.sequence;

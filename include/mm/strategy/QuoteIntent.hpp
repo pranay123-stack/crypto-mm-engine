@@ -62,8 +62,19 @@ struct QuoteIntent {
 
     IntentReason reason = IntentReason::None;
 
-    // ---- traceability (§17) ----
+    // ---- traceability ----
     StrategyIdentity identity{};
+
+    /// Monotonic sequence over every intent this runtime has produced.
+    ///
+    /// Neither of the other two fields can order two intents. `identity.
+    /// config_generation` changes only when parameters change, and
+    /// `market_sequence` is identical for two timer-triggered evaluations of
+    /// the same book. Downstream needs to know which of two intents is newer --
+    /// so that an intent delayed in a queue can never resurrect a quote a later
+    /// one already superseded -- and that requires a counter that advances on
+    /// every evaluation. Stamped by the runtime; a strategy cannot set it.
+    std::uint64_t generation = 0;
     /// The book sequence this intent was computed from. The runtime rejects an
     /// intent whose sequence does not match the context it was given, which
     /// catches a strategy that cached and replayed an old decision.

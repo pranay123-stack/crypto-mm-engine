@@ -61,6 +61,18 @@ strategies:
 
 # Deliberately small. These are the limits a first live session should run with;
 # raising them is a decision, not a default.
+# Quote-manager infrastructure controls. These decide WHETHER a resting order is
+# worth rewriting -- never what price or size to write, which is the strategy's.
+quote:
+  max_intent_age_ms: 250
+  max_market_data_age_ms: 500
+  min_price_move_ticks: 1
+  min_quantity_move_fraction: 0.0
+  min_replace_interval_ms: 0
+  cooldown_after_cancel_ms: 50
+  assume_request_lost_after_ms: 1000
+  replenish_partial_fills: true
+
 risk:
   max_position: 0.01
   max_notional: 1000

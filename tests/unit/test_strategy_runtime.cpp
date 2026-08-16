@@ -487,6 +487,43 @@ TEST_F(RuntimeTest, NotificationsReachTheStrategy) {
     EXPECT_EQ(strategy->order_events, 1U);
 }
 
+TEST_F(RuntimeTest, GatedPullsCarryAFreshGeneration) {
+    // A gated Pull is a current statement, not an absence of one. Downstream
+    // orders intents by generation, so one left at zero would read as ancient
+    // and be ignored -- silently defeating the withdrawal it expresses.
+    build<WellBehavedStrategy>();
+    const EvaluationResult quoted = runtime->evaluate(make_context());
+    ASSERT_TRUE(quoted.accepted);
+
+    StrategyContext stale = make_context();
+    stale.data_age_ns = millis(600);
+    const EvaluationResult gated = runtime->evaluate(stale);
+    EXPECT_FALSE(gated.accepted);
+    EXPECT_EQ(gated.intent.action, QuoteAction::Pull);
+    EXPECT_GT(gated.intent.generation, quoted.intent.generation);
+    EXPECT_GT(gated.intent.computed_ns, 0);
+    EXPECT_EQ(gated.intent.identity.name, StrategyName("test_good_v1"));
+}
+
+TEST_F(RuntimeTest, GenerationsAreStrictlyMonotonicAcrossEveryPath) {
+    build<WellBehavedStrategy>();
+    std::uint64_t previous = 0;
+    StrategyContext good = make_context();
+    StrategyContext stale = make_context();
+    stale.data_age_ns = millis(600);
+
+    for (int i = 0; i < 10; ++i) {
+        const EvaluationResult a = runtime->evaluate(good);
+        EXPECT_GT(a.intent.generation, previous);
+        previous = a.intent.generation;
+
+        const EvaluationResult b = runtime->evaluate(stale);
+        EXPECT_GT(b.intent.generation, previous) << "a skipped evaluation still advances";
+        previous = b.intent.generation;
+    }
+    EXPECT_EQ(runtime->generation(), previous);
+}
+
 TEST_F(RuntimeTest, MetricsCountEvaluationsSkipsAndIntents) {
     build<WellBehavedStrategy>();
     static_cast<void>(runtime->evaluate(make_context()));
