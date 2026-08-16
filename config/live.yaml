@@ -1,0 +1,101 @@
+# Live trading against Binance.
+#
+# Reaching a real venue requires SIX independent conditions to hold. Five are
+# below; the sixth is the --live flag on the command line, which no file can
+# supply. Copying this file to another machine therefore cannot cause it to
+# trade.
+#
+#   1. mode: live
+#   2. safety.live_trading_enabled: true
+#   3. every risk limit set to a positive value
+#   4. risk.emergency_loss >= risk.max_daily_loss
+#   5. exchange.credentials_env_prefix names an env var pair that exists
+#   6. --live passed explicitly at launch
+#
+# Credentials are NEVER stored here. The adapter reads:
+#     ${credentials_env_prefix}_API_KEY
+#     ${credentials_env_prefix}_API_SECRET
+# See deploy/systemd for how those reach the process.
+
+mode: live
+session_name: live
+
+exchange:
+  name: binance
+  rest_base_url: https://api.binance.com
+  ws_base_url: wss://stream.binance.com:9443
+  credentials_env_prefix: BINANCE_LIVE
+  recv_window_ms: 5000
+  rest_timeout_ms: 3000
+  book_depth: 50
+
+symbols:
+  - symbol: BTCUSDT
+    quote_size: 0.001
+
+strategy:
+  name: finalized_mm_v1
+  version: 1
+  budget_ns: 50000
+  timer_interval_ms: 100
+  params:
+    base_half_spread_bps: 4.0
+    inventory_skew_coefficient: 0.6
+    min_spread_bps: 2.0
+    max_spread_bps: 25.0
+
+# Deliberately small. These are the limits a first live session should run with;
+# raising them is a decision, not a default.
+risk:
+  max_position: 0.01
+  max_notional: 1000
+  max_portfolio_notional: 2000
+  max_order_qty: 0.002
+  max_order_notional: 250
+  max_active_orders_per_symbol: 4
+  max_active_orders_total: 12
+  max_daily_loss: 50
+  max_session_loss: 50
+  emergency_loss: 100
+  max_quote_distance_bps: 300
+
+execution:
+  max_orders_per_second: 10
+  max_cancels_per_second: 10
+  max_replaces_per_second: 10
+  max_messages_per_second: 25
+  ack_timeout_ms: 5000
+  cancel_timeout_ms: 5000
+
+safety:
+  max_market_data_age_ms: 300
+  max_processing_delay_ms: 50
+  max_clock_skew_ms: 500
+  max_consecutive_rejects: 3
+  reconcile_interval_ms: 15000
+  live_trading_enabled: true
+  cancel_all_on_shutdown: true
+
+monitoring:
+  enabled: true
+  http_host: 127.0.0.1
+  http_port: 8787
+  snapshot_interval_ms: 100
+
+persistence:
+  journal_dir: var/journal
+  state_file: var/state/engine_state.json
+  journal_flush_interval_ms: 200
+  fsync_on_flush: true
+
+logging:
+  level: info
+  dir: var/log
+  max_file_bytes: 268435456
+  max_files: 20
+  console: false
+
+io:
+  md_threads: 1
+  exec_threads: 1
+  trading_cpu: -1

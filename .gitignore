@@ -1,0 +1,8 @@
+build/
+build-*/
+var/
+compile_commands.json
+.cache/
+*.o
+*.a
+perf.data*
