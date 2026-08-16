@@ -8,13 +8,11 @@ parameter optimization, and no alpha research. The separate quant research
 platform owns those and hands this one a finalized strategy module plus its
 validated parameters.
 
-> **Status: PHASE 3 OF 16 COMPLETE — NOT PRODUCTION READY.**
-> The architecture, build system, core infrastructure and the exchange
-> abstraction layer are implemented, tested, and benchmarked. **No real venue
-> adapter exists yet** — only a deterministic mock. Binance market data, order
-> book, strategy runtime, quoting, risk, OMS, execution, portfolio,
-> reconciliation, monitoring and deployment are designed but **not yet
-> implemented**. See [Status](#status) for the exact line.
+> **Status: PHASE 4 OF 16 COMPLETE — NOT PRODUCTION READY.**
+> Market data works end to end: the Binance adapter connects, synchronizes a
+> real order book against live public data, and detects gaps, staleness and
+> disconnects. **Nothing can place an order** — no strategy, no risk engine, no
+> OMS, no execution path exists yet. See [Status](#status) for the exact line.
 
 ---
 
@@ -140,6 +138,8 @@ strategy:
 | [concurrency.md](docs/concurrency.md)           | threads, ownership, memory ordering       |
 | [state-machines.md](docs/state-machines.md)     | order, session, book, and system states   |
 | [exchange-interface.md](docs/exchange-interface.md) | adapter contract, unknown-state semantics |
+| [binance-market-data.md](docs/binance-market-data.md) | streams, normalization, reconnect, threading |
+| [order-book.md](docs/order-book.md)             | book, invariants, synchronization algorithm |
 | [benchmarks.md](docs/benchmarks.md)             | measured numbers and what they imply      |
 
 ## Status
@@ -167,9 +167,19 @@ Implemented and verified:
   `tools/check_exchange_boundary.py`, wired into `ctest`: no core file may name
   a venue or include an adapter header.
 
+- **Phase 4 — Binance market data and the local order book.** TLS WebSocket with
+  bounded jittered reconnect, REST snapshots, exact-decimal decoding, the full
+  documented snapshot/delta synchronization procedure with gap detection and
+  resync, a sorted-vector L2 book with continuously enforced invariants, and
+  per-symbol staleness. Multi-symbol, with isolation asserted by test.
+
+  373 tests, 33 benchmarks. Verified against **live public Binance data** with
+  `mm_md_probe`: book synchronized, 0 decode errors, book uncrossed at the
+  venue's 0.01 tick. Public data only — the adapter contains no order-entry code.
+
 Not yet implemented — every one of these is currently absent, not partial:
 
-Phase 4 Binance market data · Phase 5 strategy
+Phase 5 strategy
 runtime · Phase 6 quote manager · Phase 7 risk engine · Phase 8 OMS · Phase 9
 paper execution · Phase 10 portfolio/PnL · Phase 11 reconciliation & recovery ·
 Phase 12 Binance live execution · Phase 13 operations dashboard · Phase 14

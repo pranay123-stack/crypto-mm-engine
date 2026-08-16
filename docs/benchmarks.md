@@ -137,10 +137,72 @@ every 224-byte fill paid a 6× copy tax for a payload that only appears during
 reconciliation. Reducing the chunk to 4 and removing a redundant `error` field
 brought it to 680 bytes.
 
+## Phase 4 — order book, synchronization, Binance codec
+
+Same machine; note it is a shared laptop and was measurably noisier during this
+run than during Phase 2. Absolute numbers moved by up to 40% between repeats, so
+treat ratios as the signal and absolutes as indicative.
+
+| Benchmark | Time | Notes |
+| --- | --- | --- |
+| `BestBidAskLookup` | 1.3 ns | index 0 of a vector |
+| `BookUpdateNearTouch` (1 level) | 77 ns | includes per-message validation |
+| `BookUpdateAcrossFullDepth` (1 level) | 90 ns | insert far from the touch |
+| `BookUpdateBatchOfLevels/16` | 1101 ns | ~69 ns/level, realistic message shape |
+| `BookUpdateBatchStdMapBaseline/16` | 597 ns | ~37 ns/level — **faster** |
+| `SnapshotApplication/50` | 907 ns | sort, dedupe, validate, swap in |
+| `SnapshotApplication/500` | 6808 ns | ~14 ns/level |
+| `InvariantAudit` (100 levels) | 141 ns | ~1.4 ns/level |
+| `SynchronizerUpdate` | 92 ns | continuity check + book application |
+| `CodecDepthUpdate` (5 levels, ~300 B) | 5.9 µs | JSON → normalized, io thread |
+| `CodecTrade` | 3.4 µs | JSON → normalized, io thread |
+
+### The data-structure result, which went against the design
+
+`std::map` is repeatably **2–3× faster** than this project's sorted-vector book
+on mean update throughput, at every batch size measured. That is the opposite of
+the rationale originally written into `OrderBook.hpp`.
+
+The vector is kept, on grounds the throughput number does not capture — no
+allocation on the feed path, bounded footprint, contiguous top-N reads — and the
+reasoning, including what would replace it if profiling ever justified the work,
+is in [order-book.md §1](order-book.md). The point here is that the number is
+recorded rather than the claim.
+
+### JSON decode is the largest single cost in the ingress path
+
+At ~5.9 µs, decoding one depth message costs more than everything else in this
+table combined. That is acceptable *today* because it happens on the md-io
+thread, where it is dwarfed by network latency and cannot delay the trading
+thread. It is worth stating plainly rather than burying:
+
+- It bounds single-threaded feed throughput to roughly 170k depth messages/sec.
+  Binance's `@depth@100ms` on a handful of symbols is nowhere near that.
+- If more symbols or a faster stream ever approach it, the fix is local to the
+  adapter — `nlohmann::json` builds a DOM and allocates; a streaming or
+  SAX-style parse would remove most of the cost — and no interface changes.
+
+### Benchmark hygiene, again
+
+The first version of the book benchmarks constructed a `BookLevels` — a 520-byte
+struct with two 16-element arrays — **inside** the timed loop. Zero-initialising
+it dominated the measurement, reporting the book at 161 ns/update when the
+operation itself was around 62 ns, and the `std::map` baseline paid no
+equivalent cost, so the comparison was invalid in the direction that flattered
+neither structure honestly.
+
+Two further corrections in the same pass: the RNG was hoisted out of the timed
+region, and the map baseline was made to do the same trailing work as the book
+(read the touch after mutating, enforce the crossed-book check) so the two sides
+compare like for like.
+
+Same lesson as Phase 2: a benchmark that measures the wrong thing is worse than
+no benchmark, because it produces a number people design against.
+
 ## Not yet benchmarked
 
 These arrive with their phases and are listed so the gaps are explicit:
 
-order-book apply/snapshot · market-state generation · strategy invocation ·
-quote-decision diffing · risk validation · OMS state transition · order
-serialization (venue encode/decode) · end-to-end tick-to-trade.
+market-state generation · strategy invocation · quote-decision diffing · risk
+validation · OMS state transition · order serialization · end-to-end
+tick-to-trade.

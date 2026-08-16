@@ -179,6 +179,42 @@ mmx_add_module(mm_exchange
   DEPS    mm_common
 )
 
+# L0b - local order book and venue-agnostic snapshot/delta synchronization.
+file(GLOB_RECURSE MM_ORDERBOOK_SRC CONFIGURE_DEPENDS "src/orderbook/*.cpp")
+mmx_add_module(mm_orderbook
+  SOURCES ${MM_ORDERBOOK_SRC}
+  DEPS    mm_exchange
+)
+
+# Binance adapter. Links mm_orderbook (for synchronization) plus the header-only
+# Boost.Asio/Beast and nlohmann/json, which appear here and nowhere above.
+file(GLOB_RECURSE MM_BINANCE_SRC CONFIGURE_DEPENDS "src/exchange/binance/*.cpp")
+if(MM_BINANCE_SRC)
+  mmx_add_module(mm_exchange_binance
+    SOURCES ${MM_BINANCE_SRC}
+    DEPS    mm_orderbook mm_thirdparty_headers
+    PRIVATE_DEPS OpenSSL::SSL OpenSSL::Crypto
+  )
+endif()
+
+# GCC 13 reports -Wnull-dereference inside libstdc++'s <shared_ptr_base.h> when
+# it inlines through Beast's composed asynchronous operations. Evidence that it
+# is a false positive rather than a defect:
+#   * Clang 18 with the identical warning set compiles the file clean.
+#   * GCC reports it at -O2 and not at all at -O0, which is the signature of an
+#     inlining-analysis artifact rather than a real null path.
+#   * ASan+UBSan runs of this code report nothing.
+# Scoped to this one translation unit so the project keeps the full warning set
+# everywhere else. Revisit when the GCC baseline moves.
+# The two translation units that instantiate Asio/Beast composed operations.
+# Everything else in the project keeps the full warning set.
+if(MM_BINANCE_SRC AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  set_source_files_properties(
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/exchange/binance/BinanceTransport.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/exchange/binance/BinanceMarketData.cpp"
+    PROPERTIES COMPILE_OPTIONS "-Wno-null-dereference")
+endif()
+
 # Mock adapter - a reference implementation of both interfaces, used by tests
 # and benchmarks. It is a peer of the future Binance adapter, not a special
 # case, which is what makes it evidence that the abstraction is implementable.
@@ -188,6 +224,20 @@ if(MM_EXCHANGE_MOCK_SRC)
     SOURCES ${MM_EXCHANGE_MOCK_SRC}
     DEPS    mm_exchange
   )
+endif()
+
+# ---------------------------------------------------------------------------
+# Applications
+# ---------------------------------------------------------------------------
+if(TARGET mm_exchange_binance)
+  # Live public-market-data probe. Not run by ctest: it needs the internet, and
+  # a test suite that fails when the network is down teaches people to ignore it.
+  add_executable(mm_md_probe apps/mm_md_probe.cpp)
+  target_link_libraries(mm_md_probe PRIVATE mm_exchange_binance)
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/apps/mm_md_probe.cpp"
+      PROPERTIES COMPILE_OPTIONS "-Wno-null-dereference")
+  endif()
 endif()
 
 # ---------------------------------------------------------------------------
@@ -226,8 +276,10 @@ if(MMX_BUILD_TESTS)
     set_tests_properties(${suite} PROPERTIES TIMEOUT 300)
   endfunction()
 
-  mmx_add_test_suite(unit mm_common mm_exchange mm_exchange_mock)
-  mmx_add_test_suite(architecture mm_common mm_exchange mm_exchange_mock)
+  mmx_add_test_suite(unit mm_common mm_exchange mm_orderbook mm_exchange_mock mm_exchange_binance)
+  mmx_add_test_suite(architecture mm_common mm_exchange mm_orderbook mm_exchange_mock mm_exchange_binance)
+  mmx_add_test_suite(failure mm_common mm_exchange mm_orderbook mm_exchange_mock mm_exchange_binance)
+  mmx_add_test_suite(integration mm_common mm_exchange mm_orderbook mm_exchange_mock mm_exchange_binance)
 
   # Acceptance tests B and F are source-level properties, not runtime ones:
   # no core file may name a venue or include an adapter header. Enforced here
@@ -252,7 +304,7 @@ if(MMX_BUILD_BENCH)
     file(GLOB_RECURSE MM_BENCH_SRC CONFIGURE_DEPENDS "benchmarks/*.cpp")
     if(MM_BENCH_SRC)
       add_executable(mm_bench ${MM_BENCH_SRC})
-      target_link_libraries(mm_bench PRIVATE mm_common mm_exchange mm_exchange_mock benchmark::benchmark)
+      target_link_libraries(mm_bench PRIVATE mm_common mm_exchange mm_orderbook mm_exchange_mock mm_exchange_binance benchmark::benchmark)
     endif()
   else()
     message(STATUS "Google Benchmark not found - benchmarks disabled")
