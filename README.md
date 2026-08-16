@@ -8,11 +8,12 @@ parameter optimization, and no alpha research. The separate quant research
 platform owns those and hands this one a finalized strategy module plus its
 validated parameters.
 
-> **Status: PHASE 4 OF 16 COMPLETE — NOT PRODUCTION READY.**
-> Market data works end to end: the Binance adapter connects, synchronizes a
-> real order book against live public data, and detects gaps, staleness and
-> disconnects. **Nothing can place an order** — no strategy, no risk engine, no
-> OMS, no execution path exists yet. See [Status](#status) for the exact line.
+> **Status: PHASE 5 OF 16 COMPLETE — NOT PRODUCTION READY.**
+> Market data works end to end and a strategy can now be plugged in: the Binance
+> adapter synchronizes a real book from live public data, and a finalized
+> strategy runs inside a runtime that gates, times, contains and validates it.
+> **Nothing can place an order** — no risk engine, no quote manager, no OMS and
+> no execution path exists yet. See [Status](#status) for the exact line.
 
 ---
 
@@ -140,6 +141,7 @@ strategy:
 | [exchange-interface.md](docs/exchange-interface.md) | adapter contract, unknown-state semantics |
 | [binance-market-data.md](docs/binance-market-data.md) | streams, normalization, reconnect, threading |
 | [order-book.md](docs/order-book.md)             | book, invariants, synchronization algorithm |
+| [strategy-runtime.md](docs/strategy-runtime.md) | plug-in contract, lifecycle, replacement, failure behaviour |
 | [benchmarks.md](docs/benchmarks.md)             | measured numbers and what they imply      |
 
 ## Status
@@ -177,10 +179,20 @@ Implemented and verified:
   `mm_md_probe`: book synchronized, 0 decode errors, book uncrossed at the
   venue's 0.01 tick. Public data only — the adapter contains no order-entry code.
 
+- **Phase 5 — Strategy runtime.** `IStrategy`, an immutable `StrategyContext`,
+  `QuoteIntent`, a lifecycle, a compile-time registry, and a runtime that gates
+  on market-data health, times every call, catches exceptions, validates output
+  against venue rules, and stops quoting on failure rather than standing on a
+  stale quote. Strategy selection is a config change; the engine never names a
+  concrete strategy.
+
+  440 tests, 38 benchmarks. Includes one **TEST/REFERENCE ONLY** strategy that
+  exists to validate the runtime — it is not a trading strategy and makes no
+  profitability claim.
+
 Not yet implemented — every one of these is currently absent, not partial:
 
-Phase 5 strategy
-runtime · Phase 6 quote manager · Phase 7 risk engine · Phase 8 OMS · Phase 9
+Phase 6 quote manager · Phase 7 risk engine · Phase 8 OMS · Phase 9
 paper execution · Phase 10 portfolio/PnL · Phase 11 reconciliation & recovery ·
 Phase 12 Binance live execution · Phase 13 operations dashboard · Phase 14
 failure hardening · Phase 15 performance hardening · Phase 16 deployment.

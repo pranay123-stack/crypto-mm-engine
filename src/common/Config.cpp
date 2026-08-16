@@ -161,13 +161,53 @@ Status parse_symbols(const YAML::Node& n, std::vector<SymbolConfig>& out) {
 
 Status parse_strategy(const YAML::Node& n, StrategyConfig& cfg) {
     MM_RETURN_IF_ERROR(check_known_keys(
-        n, "strategy", {"name", "version", "budget_ns", "timer_interval_ms", "params"}));
+        n, "strategy",
+        {"name", "version", "enabled", "quoting_enabled", "evaluation_mode", "budget_ns",
+         "max_consecutive_budget_violations", "max_consecutive_invalid_outputs",
+         "timer_interval_ms", "max_quote_distance_bps", "params"}));
     MM_RETURN_IF_ERROR(read_scalar(n, "name", "strategy", cfg.name));
     MM_RETURN_IF_ERROR(read_scalar(n, "version", "strategy", cfg.version));
+    MM_RETURN_IF_ERROR(read_scalar(n, "enabled", "strategy", cfg.enabled));
+    MM_RETURN_IF_ERROR(read_scalar(n, "quoting_enabled", "strategy", cfg.quoting_enabled));
+    MM_RETURN_IF_ERROR(read_scalar(n, "evaluation_mode", "strategy", cfg.evaluation_mode));
     MM_RETURN_IF_ERROR(read_scalar(n, "budget_ns", "strategy", cfg.budget_ns));
+    MM_RETURN_IF_ERROR(read_scalar(n, "max_consecutive_budget_violations", "strategy",
+                                   cfg.max_consecutive_budget_violations));
+    MM_RETURN_IF_ERROR(read_scalar(n, "max_consecutive_invalid_outputs", "strategy",
+                                   cfg.max_consecutive_invalid_outputs));
     MM_RETURN_IF_ERROR(read_scalar(n, "timer_interval_ms", "strategy", cfg.timer_interval_ms));
+    MM_RETURN_IF_ERROR(
+        read_scalar(n, "max_quote_distance_bps", "strategy", cfg.max_quote_distance_bps));
     if (n && n["params"] && !n["params"].IsNull()) {
         flatten_params(n["params"], "", cfg.params);
+    }
+    return Status::ok();
+}
+
+/// Strategy-specific parameter blocks, keyed by strategy name.
+///
+/// The keys are strategy names, so they cannot be checked against a fixed list
+/// the way every other section is. What *is* checked is that the selected
+/// strategy has a block; an unknown key here is a parameter set for a strategy
+/// that is not running, which is inert rather than dangerous.
+Status parse_strategy_params(const YAML::Node& n,
+                             std::map<std::string, Params, std::less<>>& out) {
+    if (!n || n.IsNull()) {
+        return Status::ok();
+    }
+    if (!n.IsMap()) {
+        return {ErrorCode::InvalidArgument, "'strategies' must be a map keyed by strategy name"};
+    }
+    for (const auto& entry : n) {
+        const std::string name = entry.first.as<std::string>();
+        if (name.empty()) {
+            return {ErrorCode::InvalidArgument, "'strategies' contains an empty key"};
+        }
+        Params params;
+        if (!entry.second.IsNull()) {
+            flatten_params(entry.second, "", params);
+        }
+        out.insert_or_assign(name, std::move(params));
     }
     return Status::ok();
 }
@@ -340,6 +380,25 @@ Status EngineConfig::validate() const {
     if (strategy.timer_interval_ms <= 0) {
         return {ErrorCode::InvalidArgument, "strategy.timer_interval_ms must be positive"};
     }
+    if (strategy.max_consecutive_budget_violations <= 0 ||
+        strategy.max_consecutive_invalid_outputs <= 0) {
+        return {ErrorCode::InvalidArgument, "strategy fault thresholds must be positive"};
+    }
+    if (strategy.max_quote_distance_bps <= 0) {
+        return {ErrorCode::InvalidArgument, "strategy.max_quote_distance_bps must be positive"};
+    }
+    {
+        // Validated here rather than at first evaluation: an unrecognised mode
+        // would otherwise silently fall back to a default nobody chose.
+        static constexpr const char* kModes[] = {"on_book_update", "on_bbo_change", "on_timer",
+                                                 "on_bbo_change_and_timer"};
+        const bool known = std::any_of(std::begin(kModes), std::end(kModes),
+                                       [this](const char* m) { return strategy.evaluation_mode == m; });
+        if (!known) {
+            return {ErrorCode::InvalidArgument,
+                    "strategy.evaluation_mode is not recognised: " + strategy.evaluation_mode};
+        }
+    }
     if (exchange.book_depth <= 0) {
         return {ErrorCode::InvalidArgument, "exchange.book_depth must be positive"};
     }
@@ -462,7 +521,7 @@ Result<EngineConfig> load_config_string(const std::string& yaml_text) {
     MM_RETURN_IF_ERROR_RESULT(check_known_keys(
         root, "",
         {"mode", "session_name", "exchange", "symbols", "strategy", "risk", "execution", "safety",
-         "paper", "monitoring", "persistence", "logging", "io"}));
+         "paper", "monitoring", "persistence", "logging", "io", "strategies"}));
 
     EngineConfig cfg;
 
@@ -477,6 +536,21 @@ Result<EngineConfig> load_config_string(const std::string& yaml_text) {
     MM_RETURN_IF_ERROR_RESULT(parse_exchange(root["exchange"], cfg.exchange));
     MM_RETURN_IF_ERROR_RESULT(parse_symbols(root["symbols"], cfg.symbols));
     MM_RETURN_IF_ERROR_RESULT(parse_strategy(root["strategy"], cfg.strategy));
+    MM_RETURN_IF_ERROR_RESULT(parse_strategy_params(root["strategies"], cfg.strategy_params));
+    // Merge the selected strategy's block into its parameters. Doing it here
+    // means the runtime receives one flat set and never has to know that two
+    // sources existed.
+    {
+        const auto it = cfg.strategy_params.find(cfg.strategy.name);
+        if (it != cfg.strategy_params.end()) {
+            for (const std::string& key : it->second.keys()) {
+                const auto value = it->second.get_string(key);
+                if (value.is_ok()) {
+                    cfg.strategy.params.set(key, value.value());
+                }
+            }
+        }
+    }
     MM_RETURN_IF_ERROR_RESULT(parse_risk(root["risk"], cfg.risk));
     MM_RETURN_IF_ERROR_RESULT(parse_execution(root["execution"], cfg.execution));
     MM_RETURN_IF_ERROR_RESULT(parse_safety(root["safety"], cfg.safety));
