@@ -74,6 +74,32 @@ quote:
   replenish_partial_fills: true
 
 risk:
+  # The engine refuses every exposure-adding action unless armed, and arming
+  # requires the per-symbol limits below to be set. An unset limit is silently
+  # unlimited, which is the one configuration a risk engine must never have.
+  enabled: true
+  max_market_data_age_ms: 500
+  max_position_age_ms: 5000
+
+  # Rate limits. Zero disables one. Cancels are counted but never refused: the
+  # moment the system is bursting is the moment withdrawing matters most.
+  max_new_orders_per_second: 20
+  max_cancels_per_second: 40
+  max_replaces_per_second: 20
+  max_actions_per_second: 60
+  burst_capacity: 40
+
+  symbols:
+    BTCUSDT:
+      max_position: 0.05
+      max_position_notional: 5000
+      max_order_quantity: 0.01
+      max_order_notional: 1200
+      max_working_exposure: 0.1
+      max_side_exposure: 0.06
+      max_open_orders: 4
+      price_band_bps: 500
+
   max_position: 0.01
   max_notional: 1000
   max_portfolio_notional: 2000
