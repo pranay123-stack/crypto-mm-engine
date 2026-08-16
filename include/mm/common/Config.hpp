@@ -30,7 +30,10 @@ enum class TradingMode : std::uint8_t { Paper = 0, Live = 1 };
 [[nodiscard]] bool parse_trading_mode(std::string_view text, TradingMode& out) noexcept;
 
 struct ExchangeConfig {
-    std::string name = "binance";
+    /// No default. A venue is an explicit choice, and defaulting to one would
+    /// bake an adapter's identity into the core -- the core must remain valid
+    /// with every adapter removed from the tree. `validate()` requires it.
+    std::string name;
     std::string rest_base_url;
     std::string ws_base_url;
     /// Environment variables holding credentials, e.g. "BINANCE_PAPER" ->

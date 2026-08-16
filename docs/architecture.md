@@ -415,10 +415,11 @@ local to the adapter.
 | Document                                             | Covers                                   |
 | ---------------------------------------------------- | ---------------------------------------- |
 | [strategy-interface.md](strategy-interface.md)       | plug-in contract, registry, lifecycle    |
-| [exchange-interface.md](exchange-interface.md)       | adapter contract, normalized types       |
+| [exchange-interface.md](exchange-interface.md)       | adapter contract, normalized types, unknown-state semantics |
 | [market-data.md](market-data.md)                     | sessions, sequencing, resync, staleness  |
 | [concurrency.md](concurrency.md)                     | threads, ownership, memory ordering      |
 | [state-machines.md](state-machines.md)               | order, session, book, system states      |
+| [benchmarks.md](benchmarks.md)                       | measured numbers and what they imply     |
 | [risk.md](risk.md)                                   | limits, kill switches, safety halts      |
 | [oms.md](oms.md)                                     | order lifecycle and failure handling     |
 | [execution.md](execution.md)                         | paper and live execution paths           |
