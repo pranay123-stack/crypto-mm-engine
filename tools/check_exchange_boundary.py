@@ -113,6 +113,28 @@ PAPER_FORBIDDEN_INCLUDES = [
     ("mm/dashboard/", "the dashboard"),
 ]
 
+# Phase 10 §"architectural boundary". Accounting consumes normalized engine
+# events and nothing else. It must not reach a venue, must not become a second
+# OMS, and must not know that a simulator exists.
+ACCOUNTING_DIRS = ("include/mm/portfolio/", "src/portfolio/")
+ACCOUNTING_FORBIDDEN_INCLUDES = [
+    ("boost/asio", "networking"),
+    ("boost/beast", "HTTP/WebSocket"),
+    ("openssl/", "TLS and signing"),
+    ("nlohmann/json", "venue wire formats"),
+    ("curl/", "networking"),
+    ("sys/socket", "networking"),
+    ("mm/exchange/binance/", "a venue adapter"),
+    ("mm/exchange/paper/", "the paper simulator's internals"),
+    ("mm/exchange/mock/", "an adapter"),
+    ("mm/oms/", "order lifecycle -- accounting is not a second OMS"),
+    ("mm/orderbook/", "market data -- accounting is handed marks, it does not read a book"),
+    ("mm/strategy/", "strategy logic"),
+    ("strategies/", "a strategy implementation"),
+    ("mm/quote/", "quote decisions"),
+    ("mm/dashboard/", "the dashboard"),
+]
+
 QUOTE_FORBIDDEN_INCLUDES = [
     ("boost/asio", "networking"),
     ("boost/beast", "HTTP/WebSocket"),
@@ -234,6 +256,10 @@ def SUPPORT_DIRS_GLOB():
     """Shared test fixture headers, which are included together and so share a
     namespace across translation units."""
     return (ROOT / "tests" / "support").glob("*.hpp")
+
+
+def is_accounting_file(rel: str) -> bool:
+    return any(rel.startswith(d) for d in ACCOUNTING_DIRS)
 
 
 def is_paper_file(rel: str) -> bool:
@@ -368,6 +394,20 @@ def scan() -> int:
                         violations.append(
                             f"{rel}:{lineno}: paper execution includes '{needle}' "
                             f"({capability}); it simulates a venue, it is not one"
+                        )
+
+        # --- Test E5: accounting capability denial (Phase 10) ------------
+        if is_accounting_file(rel):
+            for lineno, line in enumerate(code.splitlines(), 1):
+                stripped = line.strip()
+                if not stripped.startswith("#include"):
+                    continue
+                for needle, capability in ACCOUNTING_FORBIDDEN_INCLUDES:
+                    if needle in stripped:
+                        violations.append(
+                            f"{rel}:{lineno}: accounting includes '{needle}' "
+                            f"({capability}); it consumes normalized events and owns only "
+                            f"position, cost basis, PnL, fees and balances"
                         )
 
         # --- Test F: no venue identifiers outside adapter directories ----
@@ -627,6 +667,39 @@ def self_test() -> int:
         if paper_forbidden_hit(line):
             failures.append(f"false positive on a permitted paper include: {line}")
 
+    accounting_must_detect = [
+        '#include <boost/asio/io_context.hpp>',
+        '#include <nlohmann/json.hpp>',
+        '#include "mm/exchange/binance/BinanceExecution.hpp"',
+        '#include "mm/exchange/paper/PaperExecution.hpp"',
+        '#include "mm/oms/OrderManager.hpp"',
+        '#include "mm/orderbook/OrderBook.hpp"',
+        '#include "mm/strategy/IStrategy.hpp"',
+        '#include "mm/quote/QuoteManager.hpp"',
+    ]
+    accounting_must_ignore = [
+        # Normalized execution events, the risk types it publishes, and the
+        # engine's own arithmetic. Exactly what accounting legitimately needs.
+        '#include "mm/exchange/common/ExecutionEvents.hpp"',
+        '#include "mm/risk/PositionState.hpp"',
+        '#include "mm/risk/PortfolioState.hpp"',
+        '#include "mm/common/Fixed.hpp"',
+        '#include "mm/common/Time.hpp"',
+    ]
+
+    def accounting_forbidden_hit(line: str) -> bool:
+        stripped = line.strip()
+        if not stripped.startswith("#include"):
+            return False
+        return any(needle in stripped for needle, _ in ACCOUNTING_FORBIDDEN_INCLUDES)
+
+    for line in accounting_must_detect:
+        if not accounting_forbidden_hit(line):
+            failures.append(f"missed a forbidden accounting include: {line}")
+    for line in accounting_must_ignore:
+        if accounting_forbidden_hit(line):
+            failures.append(f"false positive on a permitted accounting include: {line}")
+
     def oms_forbidden_hit(line: str) -> bool:
         stripped = line.strip()
         if not stripped.startswith("#include"):
@@ -647,10 +720,10 @@ def self_test() -> int:
         return 1
     detections = (len(must_detect) + len(strategy_must_detect) + len(quote_must_detect) +
                   len(risk_must_detect) + len(oms_must_detect) + len(mode_must_detect) +
-                  len(paper_must_detect))
+                  len(paper_must_detect) + len(accounting_must_detect))
     non_detections = (len(must_ignore) + len(strategy_must_ignore) + len(quote_must_ignore) +
                       len(risk_must_ignore) + len(oms_must_ignore) + len(mode_must_ignore) +
-                      len(paper_must_ignore))
+                      len(paper_must_ignore) + len(accounting_must_ignore))
     print(f"self-test: {detections} detections and {non_detections} non-detections "
           f"behave as expected")
     return 0

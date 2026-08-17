@@ -78,6 +78,12 @@ std::string_view to_string(RiskReason r) noexcept {
         case RiskReason::OwnershipViolation:        return "OWNERSHIP_VIOLATION";
         case RiskReason::ArithmeticOverflow:        return "ARITHMETIC_OVERFLOW";
         case RiskReason::ConfigurationMissing:      return "CONFIGURATION_MISSING";
+        case RiskReason::PortfolioUnavailable: return "PORTFOLIO_UNAVAILABLE";
+        case RiskReason::PortfolioStale:       return "PORTFOLIO_STALE";
+        case RiskReason::PnlIndeterminate:     return "PNL_INDETERMINATE";
+        case RiskReason::MaxDailyLoss:         return "MAX_DAILY_LOSS";
+        case RiskReason::MaxSessionLoss:       return "MAX_SESSION_LOSS";
+        case RiskReason::EmergencyLoss:        return "EMERGENCY_LOSS";
         case RiskReason::ReductionInvalid:          return "REDUCTION_INVALID";
     }
     return "UNKNOWN";

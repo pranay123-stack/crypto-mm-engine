@@ -220,6 +220,19 @@ mmx_add_module(mm_oms
   DEPS    mm_risk
 )
 
+# L5 - portfolio accounting. Links mm_risk so it can publish exactly the
+# position and portfolio types risk consumes, and through it mm_exchange for
+# normalized fill events. Deliberately NOT mm_oms: accounting consumes
+# confirmed fills, not order lifecycle, and depending on the OMS would invite
+# it to become a second order-state machine.
+file(GLOB_RECURSE MM_PORTFOLIO_SRC CONFIGURE_DEPENDS "src/portfolio/*.cpp")
+if(MM_PORTFOLIO_SRC)
+  mmx_add_module(mm_portfolio
+    SOURCES ${MM_PORTFOLIO_SRC}
+    DEPS    mm_risk
+  )
+endif()
+
 # Strategy plug-ins.
 #
 # An OBJECT library, not a static one: a self-registering translation unit that
@@ -338,11 +351,11 @@ if(MMX_BUILD_TESTS)
     set_tests_properties(${suite} PROPERTIES TIMEOUT 300)
   endfunction()
 
-  mmx_add_test_suite(unit mm_common mm_exchange mm_orderbook mm_strategy mm_quote mm_risk mm_oms mm_strategies mm_exchange_mock mm_exchange_paper mm_exchange_binance)
-  mmx_add_test_suite(architecture mm_common mm_exchange mm_orderbook mm_strategy mm_quote mm_risk mm_oms mm_strategies mm_exchange_mock mm_exchange_paper mm_exchange_binance)
-  mmx_add_test_suite(failure mm_common mm_exchange mm_orderbook mm_strategy mm_quote mm_risk mm_oms mm_strategies mm_exchange_mock mm_exchange_paper mm_exchange_binance)
-  mmx_add_test_suite(strategy_swap mm_common mm_exchange mm_orderbook mm_strategy mm_quote mm_risk mm_oms mm_strategies mm_exchange_mock mm_exchange_paper mm_exchange_binance)
-  mmx_add_test_suite(integration mm_common mm_exchange mm_orderbook mm_strategy mm_quote mm_risk mm_oms mm_strategies mm_exchange_mock mm_exchange_paper mm_exchange_binance)
+  mmx_add_test_suite(unit mm_common mm_exchange mm_orderbook mm_strategy mm_quote mm_risk mm_oms mm_portfolio mm_strategies mm_exchange_mock mm_exchange_paper mm_exchange_binance)
+  mmx_add_test_suite(architecture mm_common mm_exchange mm_orderbook mm_strategy mm_quote mm_risk mm_oms mm_portfolio mm_strategies mm_exchange_mock mm_exchange_paper mm_exchange_binance)
+  mmx_add_test_suite(failure mm_common mm_exchange mm_orderbook mm_strategy mm_quote mm_risk mm_oms mm_portfolio mm_strategies mm_exchange_mock mm_exchange_paper mm_exchange_binance)
+  mmx_add_test_suite(strategy_swap mm_common mm_exchange mm_orderbook mm_strategy mm_quote mm_risk mm_oms mm_portfolio mm_strategies mm_exchange_mock mm_exchange_paper mm_exchange_binance)
+  mmx_add_test_suite(integration mm_common mm_exchange mm_orderbook mm_strategy mm_quote mm_risk mm_oms mm_portfolio mm_strategies mm_exchange_mock mm_exchange_paper mm_exchange_binance)
 
   # Acceptance tests B and F are source-level properties, not runtime ones:
   # no core file may name a venue or include an adapter header. Enforced here
@@ -367,7 +380,7 @@ if(MMX_BUILD_BENCH)
     file(GLOB_RECURSE MM_BENCH_SRC CONFIGURE_DEPENDS "benchmarks/*.cpp")
     if(MM_BENCH_SRC)
       add_executable(mm_bench ${MM_BENCH_SRC})
-      target_link_libraries(mm_bench PRIVATE mm_common mm_exchange mm_orderbook mm_strategy mm_quote mm_risk mm_oms mm_strategies mm_exchange_mock mm_exchange_paper mm_exchange_binance benchmark::benchmark)
+      target_link_libraries(mm_bench PRIVATE mm_common mm_exchange mm_orderbook mm_strategy mm_quote mm_risk mm_oms mm_portfolio mm_strategies mm_exchange_mock mm_exchange_paper mm_exchange_binance benchmark::benchmark)
     endif()
   else()
     message(STATUS "Google Benchmark not found - benchmarks disabled")

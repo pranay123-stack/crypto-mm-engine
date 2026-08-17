@@ -51,7 +51,7 @@ CMake target graph — each layer is a separate target with explicit
       │                │            │              │
       ├────────────────┴────────────┴──────────────┤
       ▼                                            ▼
- L5 portfolio/        position · balance · pnl · fees
+ L5 portfolio/        position · balance · pnl · fees        (Phase 10)
       │
  L4  oms/             order state machine · order store · client-id allocator
       │

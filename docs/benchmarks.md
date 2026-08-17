@@ -434,6 +434,42 @@ The fixtures now `SkipWithError` unless they produced exactly the requested
 number of resting orders. A benchmark that silently measures an empty container
 reports a very good number.
 
+
+## Phase 10 — accounting
+
+Same shared desktop, `-DCMAKE_BUILD_TYPE=Release`, pinned, `--benchmark_min_time=0.2s`.
+The environment caveat from the Phase 8 and 9 sections applies unchanged: treat
+the ratios as meaningful and the absolute values as an estimate a quiet machine
+would need to confirm.
+
+> These are engineering measurements of the accounting layer's own cost.
+> **They are not exchange latency, and they say nothing whatsoever about whether
+> any strategy makes money.**
+
+| Benchmark | Time | What it covers |
+| --- | --- | --- |
+| `AccountingPositionSnapshot` | 10.9 ns | the per-symbol view risk reads each cycle |
+| `AccountingApplyMark` | 17.0 ns | unrealized-PnL recomputation |
+| `AccountingPortfolioAggregate` / 1 · 8 · 32 | 42.2 · 169 · 606 ns | the full cross-symbol pass |
+| `AccountingRiskView` | 91.7 ns | aggregate plus translation into risk's vocabulary |
+| `AccountingDuplicateDetection` | 237 ns | the redelivery path, which a real venue makes common |
+| `AccountingApplyFill` | 842 ns | validation, dedup, cost basis, realized PnL, fees |
+| `AccountingSnapshotForRecovery` | 1506 ns | allocates by design; not a hot path |
+
+### Reading these
+
+**Portfolio aggregation is linear in symbols** at roughly 19 ns each, and is
+recomputed on demand rather than cached — which is why it can never drift from
+the accounts it summarises. At a realistic tens-of-symbols book that is well
+under a microsecond.
+
+**`AccountingApplyFill` at 842 ns is dominated by duplicate detection**, which
+is a 64-entry linear scan of 34-byte trade ids and shows up as the 237 ns
+baseline in its own benchmark — paid twice per fill, once to check and once to
+insert. That is a deliberate trade: bounded memory and no allocation on the hot
+path, against a market maker's fill rate of tens to hundreds per second, where
+a microsecond is not a constraint. Measured before deciding, and left alone.
+
 ## Not yet benchmarked
 
 These arrive with their phases and are listed so the gaps are explicit:
