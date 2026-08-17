@@ -236,11 +236,34 @@ TEST(ConfigLiveGates, PaperModeNeedsNoGates) {
     EXPECT_TRUE(cfg.validate_live_gates(false).is_ok());
 }
 
-TEST(ConfigLiveGates, FullyConfiguredLivePasses) {
+TEST(ConfigLiveGates, FullyConfiguredLiveClearsEverySafetyGate) {
+    // Every gate this config can satisfy is satisfied: the file opts in, the
+    // operator opts in, and all the limits are set. What stops it is the one
+    // thing configuration cannot fix.
     const auto cfg = load_ok(kLiveReadyYaml);
     ASSERT_EQ(cfg.mode, TradingMode::Live);
     const Status s = cfg.validate_live_gates(true);
-    EXPECT_TRUE(s.is_ok()) << s.to_string();
+    ASSERT_TRUE(s.is_error());
+    EXPECT_NE(s.message().find("no live execution adapter"), std::string::npos)
+        << "the refusal must name the missing adapter, not look like a limit problem: "
+        << s.to_string();
+}
+
+TEST(ConfigLiveGates, TheAdapterGateIsTheLastOneNotTheFirst) {
+    // A live config with a missing limit must still report the *limit* -- the
+    // "no adapter" answer would mask a real misconfiguration that has to be
+    // fixed before live ever runs.
+    std::string yaml(kLiveReadyYaml);
+    const auto pos = yaml.find("max_position:");
+    ASSERT_NE(pos, std::string::npos);
+    yaml.replace(pos, std::string("max_position:").size(), "max_position_unused:");
+    const auto r = load_config_string(yaml);
+    if (r.is_ok()) {
+        const Status s = r.value().validate_live_gates(true);
+        ASSERT_TRUE(s.is_error());
+        EXPECT_EQ(s.message().find("no live execution adapter"), std::string::npos)
+            << "a missing limit must be reported as a missing limit: " << s.to_string();
+    }
 }
 
 TEST(ConfigLiveGates, ConfigAloneCannotGoLive) {

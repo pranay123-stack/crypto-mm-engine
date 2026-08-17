@@ -8,14 +8,14 @@ parameter optimization, and no alpha research. The separate quant research
 platform owns those and hands this one a finalized strategy module plus its
 validated parameters.
 
-> **Status: PHASE 8 OF 16 COMPLETE — NOT PRODUCTION READY.**
-> The pipeline runs from live market data to a tracked order lifecycle: the
-> Binance adapter synchronizes a real book, a strategy runs inside a runtime that
-> contains it, the quote manager turns intent into desired order state, the risk
-> engine decides what is permitted, and the OMS owns what happens to an order
-> afterwards. **Nothing can reach a real venue with an order** — no venue
-> execution adapter and no paper execution exist yet, so the only implementation
-> the OMS can talk to is the test mock. See [Status](#status).
+> **Status: PHASE 9 OF 16 COMPLETE — NOT PRODUCTION READY.**
+> The pipeline now runs end to end: the Binance adapter synchronizes a real
+> book, a strategy runs inside a runtime that contains it, the quote manager
+> turns intent into desired order state, the risk engine decides what is
+> permitted, the OMS owns the order lifecycle, and a simulated venue executes
+> against the live book and answers asynchronously. **Nothing can reach a real
+> venue with an order** — no live execution adapter exists, and selecting one
+> fails at startup rather than falling back. See [Status](#status).
 
 ---
 
@@ -147,6 +147,8 @@ strategy:
 | [quote-manager.md](docs/quote-manager.md)       | diff algorithm, ownership, generations, churn controls |
 | [risk-engine.md](docs/risk-engine.md)           | exposure mathematics, fail-closed rules, kill switch |
 | [oms.md](docs/oms.md)                           | order identity, lifecycle, reconciliation, recovery, invariants |
+| [execution.md](docs/execution.md)               | the execution interface, request and event models, asynchrony |
+| [paper-execution.md](docs/paper-execution.md)   | fill model, queue approximation, latency, failure injection, replay |
 | [benchmarks.md](docs/benchmarks.md)             | measured numbers and what they imply      |
 
 ## Status
@@ -231,12 +233,29 @@ Implemented and verified:
   the boundary checker — including a check that paper and live never branch inside
   the OMS.
 
+- **Phase 9 — Execution layer and paper execution.** A simulated venue behind
+  the real execution interface: asynchronous by construction, holding its own
+  order state that the engine cannot touch, matching against the same
+  normalized book the strategy reads. Conservative displayed-liquidity fill
+  model with a documented queue approximation, explicit post-only and
+  marketable-limit semantics, five separately configurable latencies, deterministic
+  failure injection by count rather than probability, cancel/fill race
+  modelling, chunked open-order snapshots for reconciliation, and session
+  record-and-replay.
+
+  Paper execution is an execution simulator for validating the live engine
+  architecture — **not a backtester**. It loads no history and makes no claim
+  about whether a strategy is any good. Selecting live execution fails at
+  startup with a message naming the missing adapter; it never falls back.
+
+  738 tests, 88 benchmarks. Contains no network, no credentials, no venue wire
+  format, and no strategy, risk or OMS logic, enforced by the boundary checker.
+
   648 tests, 75 benchmarks.
 
 Not yet implemented — every one of these is currently absent, not partial:
 
-Phase 9
-paper execution · Phase 10 portfolio/PnL · Phase 11 reconciliation & recovery ·
+Phase 10 portfolio/PnL · Phase 11 reconciliation & recovery ·
 Phase 12 Binance live execution · Phase 13 operations dashboard · Phase 14
 failure hardening · Phase 15 performance hardening · Phase 16 deployment.
 

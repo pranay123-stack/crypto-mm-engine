@@ -88,6 +88,31 @@ OMS_MODE_TOKENS = re.compile(
     r"\b(is_paper|paper_mode|live_mode|is_live_mode|TradingMode|kPaperMode|kLiveMode|"
     r"PaperExchange|LiveExchange)\b"
 )
+# Phase 9 §36/§37. The paper adapter is an execution simulator, not a venue
+# client and not part of the engine's decision-making. It may read normalized
+# execution types, normalized market data and the order book; it may not reach
+# a network, know a venue's wire format, or contain any strategy, risk or OMS
+# logic. If it could, "paper and live differ only below the interface" would
+# stop being true the moment somebody took a shortcut.
+PAPER_DIRS = ("include/mm/exchange/paper/", "src/exchange/paper/")
+PAPER_FORBIDDEN_INCLUDES = [
+    ("boost/asio", "networking"),
+    ("boost/beast", "HTTP/WebSocket"),
+    ("openssl/", "TLS and signing"),
+    ("nlohmann/json", "venue wire formats"),
+    ("curl/", "networking"),
+    ("sys/socket", "networking"),
+    ("netinet/", "networking"),
+    ("mm/exchange/binance/", "a venue adapter"),
+    ("mm/exchange/mock/", "another adapter"),
+    ("mm/strategy/", "strategy logic"),
+    ("strategies/", "a strategy implementation"),
+    ("mm/quote/", "quote decisions"),
+    ("mm/risk/", "risk decisions"),
+    ("mm/oms/", "order management"),
+    ("mm/dashboard/", "the dashboard"),
+]
+
 QUOTE_FORBIDDEN_INCLUDES = [
     ("boost/asio", "networking"),
     ("boost/beast", "HTTP/WebSocket"),
@@ -203,6 +228,16 @@ def is_strategy_file(rel: str) -> bool:
 
 def is_quote_file(rel: str) -> bool:
     return any(rel.startswith(d) for d in QUOTE_DIRS)
+
+
+def SUPPORT_DIRS_GLOB():
+    """Shared test fixture headers, which are included together and so share a
+    namespace across translation units."""
+    return (ROOT / "tests" / "support").glob("*.hpp")
+
+
+def is_paper_file(rel: str) -> bool:
+    return any(rel.startswith(d) for d in PAPER_DIRS)
 
 
 def is_oms_file(rel: str) -> bool:
@@ -322,6 +357,19 @@ def scan() -> int:
                         f"must differ only below the execution interface"
                     )
 
+        # --- Test E4: paper adapter capability denial (Phase 9 §36) ------
+        if is_paper_file(rel):
+            for lineno, line in enumerate(code.splitlines(), 1):
+                stripped = line.strip()
+                if not stripped.startswith("#include"):
+                    continue
+                for needle, capability in PAPER_FORBIDDEN_INCLUDES:
+                    if needle in stripped:
+                        violations.append(
+                            f"{rel}:{lineno}: paper execution includes '{needle}' "
+                            f"({capability}); it simulates a venue, it is not one"
+                        )
+
         # --- Test F: no venue identifiers outside adapter directories ----
         if is_adapter_file(rel):
             continue
@@ -336,6 +384,34 @@ def scan() -> int:
                     f"{rel}:{lineno}: venue wire token '{m.group(0)}' in core code: "
                     f"{line.strip()[:90]}"
                 )
+
+    # --- Test G: no duplicate type name across the shared test fixtures ------
+    #
+    # Two classes with the same name in the same namespace are an ODR violation
+    # even when both are `final` and in different headers: the linker merges
+    # their inline functions and may run one class's destructor over the other's
+    # object. That produced a heap-use-after-free in Phase 9 that only ASan
+    # caught, so it is checked mechanically here rather than trusted to review.
+    fixture_types: dict[str, str] = {}
+    type_decl = re.compile(r"^\s*(?:class|struct)\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:final)?\s*[:{]")
+    for path in sorted(SUPPORT_DIRS_GLOB()):
+        rel = str(path.relative_to(ROOT))
+        try:
+            code = strip_comments(path.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            continue
+        for lineno, line in enumerate(code.splitlines(), 1):
+            m = type_decl.match(line)
+            if m is None:
+                continue
+            name = m.group(1)
+            if name in fixture_types and fixture_types[name] != rel:
+                violations.append(
+                    f"{rel}:{lineno}: '{name}' is also defined in {fixture_types[name]}; "
+                    f"two types of the same name in one namespace is an ODR violation"
+                )
+            else:
+                fixture_types[name] = rel
 
     print(f"exchange boundary check: scanned {scanned} files")
     if violations:
@@ -517,6 +593,40 @@ def self_test() -> int:
         if OMS_MODE_TOKENS.search(line) is not None:
             failures.append(f"false positive on OMS liveness vocabulary: {line}")
 
+    paper_must_detect = [
+        '#include <boost/asio/io_context.hpp>',
+        '#include <boost/beast/websocket.hpp>',
+        '#include <nlohmann/json.hpp>',
+        '#include <sys/socket.h>',
+        '#include "mm/exchange/binance/BinanceExecution.hpp"',
+        '#include "mm/oms/OrderManager.hpp"',
+        '#include "mm/risk/RiskEngine.hpp"',
+        '#include "mm/strategy/IStrategy.hpp"',
+    ]
+    paper_must_ignore = [
+        # Exactly what a venue simulator legitimately needs: the normalized
+        # interface it implements, the normalized market data it reads, and the
+        # engine's own book.
+        '#include "mm/exchange/common/IExchangeExecution.hpp"',
+        '#include "mm/exchange/common/ExecutionEvents.hpp"',
+        '#include "mm/exchange/common/MarketDataEvents.hpp"',
+        '#include "mm/orderbook/OrderBook.hpp"',
+        '#include "mm/common/Fixed.hpp"',
+    ]
+
+    def paper_forbidden_hit(line: str) -> bool:
+        stripped = line.strip()
+        if not stripped.startswith("#include"):
+            return False
+        return any(needle in stripped for needle, _ in PAPER_FORBIDDEN_INCLUDES)
+
+    for line in paper_must_detect:
+        if not paper_forbidden_hit(line):
+            failures.append(f"missed a forbidden paper-execution include: {line}")
+    for line in paper_must_ignore:
+        if paper_forbidden_hit(line):
+            failures.append(f"false positive on a permitted paper include: {line}")
+
     def oms_forbidden_hit(line: str) -> bool:
         stripped = line.strip()
         if not stripped.startswith("#include"):
@@ -536,9 +646,11 @@ def self_test() -> int:
             print(f"  {f}")
         return 1
     detections = (len(must_detect) + len(strategy_must_detect) + len(quote_must_detect) +
-                  len(risk_must_detect) + len(oms_must_detect) + len(mode_must_detect))
+                  len(risk_must_detect) + len(oms_must_detect) + len(mode_must_detect) +
+                  len(paper_must_detect))
     non_detections = (len(must_ignore) + len(strategy_must_ignore) + len(quote_must_ignore) +
-                      len(risk_must_ignore) + len(oms_must_ignore) + len(mode_must_ignore))
+                      len(risk_must_ignore) + len(oms_must_ignore) + len(mode_must_ignore) +
+                      len(paper_must_ignore))
     print(f"self-test: {detections} detections and {non_detections} non-detections "
           f"behave as expected")
     return 0

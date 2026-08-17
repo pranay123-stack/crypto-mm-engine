@@ -28,13 +28,33 @@ TEST(ShippedConfig, PaperLoadsAndValidates) {
     EXPECT_TRUE(cfg.validate_live_gates(true).is_ok());
 }
 
-TEST(ShippedConfig, LiveLoadsAndPassesItsOwnGates) {
+TEST(ShippedConfig, LiveLoadsAndPassesItsOwnGatesButHasNoAdapterToRunOn) {
     const auto r = load_config_file(config_path("live.yaml"));
     ASSERT_TRUE(r.is_ok()) << r.status().to_string();
     const EngineConfig& cfg = r.value();
     EXPECT_EQ(cfg.mode, TradingMode::Live);
+    // Structurally valid, and every live *safety* gate it can satisfy is
+    // satisfied -- the file is a working template for when live exists.
+    EXPECT_EQ(cfg.effective_execution_mode(), ExecutionMode::Live);
+
+    // And it still cannot run, because no live execution adapter exists yet
+    // (Phase 9 §39). Failing here rather than falling back to paper is the
+    // point: a run somebody believed was live must never quietly not be.
     const Status s = cfg.validate_live_gates(true);
-    EXPECT_TRUE(s.is_ok()) << s.to_string();
+    ASSERT_TRUE(s.is_error()) << "live must not be runnable before the adapter exists";
+    EXPECT_NE(s.message().find("no live execution adapter"), std::string::npos)
+        << s.to_string();
+}
+
+TEST(ShippedConfig, PaperConfigCannotSelectLiveExecution) {
+    const auto r = load_config_file(config_path("paper.yaml"));
+    ASSERT_TRUE(r.is_ok()) << r.status().to_string();
+    // The shipped paper config is paper on both switches, and the availability
+    // gate agrees. There is no path from this file to a real venue.
+    EXPECT_EQ(r.value().mode, TradingMode::Paper);
+    EXPECT_EQ(r.value().effective_execution_mode(), ExecutionMode::Paper);
+    EXPECT_TRUE(r.value().validate_execution_available().is_ok());
+    EXPECT_TRUE(r.value().validate_live_gates(false).is_ok());
 }
 
 TEST(ShippedConfig, LiveConfigStillRefusesWithoutTheOperatorFlag) {

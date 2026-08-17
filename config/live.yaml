@@ -177,3 +177,53 @@ io:
   md_threads: 1
   exec_threads: 1
   trading_cpu: -1
+
+# Which execution environment to build. The only implemented one is 'paper';
+# selecting 'live' fails at startup rather than falling back, because a silent
+# fallback is how a run somebody believed was live quietly is not.
+execution_env:
+  mode: paper
+
+paper:
+  # Simulated latency. THESE ARE SIMULATION VALUES, not measurements of Binance
+  # or any other venue, and nothing should quote them as such. Their purpose is
+  # to force the engine to cope with answers that arrive after the request.
+  request_latency_us: 500
+  ack_latency_us: 1500
+  cancel_latency_us: 1500
+  replace_latency_us: 2000
+  fill_latency_us: 1000
+  query_latency_us: 5000
+
+  # 'displayed_liquidity' fills only against size the book actually showed.
+  # 'full_on_cross' fills everything the moment the book crosses -- deliberately
+  # optimistic, and never the default: "the price touched my level so I am
+  # filled" is the single assumption that most flatters a paper run.
+  fill_model: displayed_liquidity
+
+  # A post-only order that would cross is refused ('reject', what most venues
+  # do) or retired ('expire'). It is never silently converted into a taker.
+  post_only_policy: reject
+
+  # 'atomic' or 'unsupported'. The latter makes the quote manager decompose a
+  # replace into cancel-then-new, which is worth being able to test.
+  replace_mode: atomic
+
+  # Share of displayed size assumed available to us, in basis points. 10000
+  # means "always first in the queue", which is the assumption that makes a
+  # paper run look better than reality.
+  queue_share_bps: 5000
+
+  # A book older than this stops producing fills. Cancellation and
+  # reconciliation continue regardless -- gating those on fresh data would trap
+  # exposure exactly when releasing it matters most.
+  max_book_age_ms: 500
+
+  max_orders: 1024
+
+  # Zero means fully deterministic, which is what every test uses. Randomness
+  # is opt-in and never required.
+  deterministic_seed: 0
+
+  maker_fee_bps: 1.0
+  taker_fee_bps: 4.0
