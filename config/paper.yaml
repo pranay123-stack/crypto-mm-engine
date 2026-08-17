@@ -99,6 +99,31 @@ risk:
   emergency_loss: 400
   max_quote_distance_bps: 500
 
+oms:
+  # Client order ids are minted as <prefix>-<session>-<sequence> in base 36.
+  # Binance caps client order ids at 36 characters; the prefix must leave room
+  # for the rest, and generation fails rather than truncating -- two orders
+  # sharing an id is unrecoverable.
+  client_id_prefix: "mmp"
+  # Zero derives the session id from the process start time, so ids from two
+  # runs cannot collide even if a previous run left orders resting.
+  session_id: 0
+  max_client_id_length: 36
+
+  # How long the engine will believe a request is still in flight. On expiry
+  # the order becomes UNKNOWN -- never CANCELLED. See docs/oms.md §12.
+  new_request_timeout_ms: 5000
+  cancel_request_timeout_ms: 5000
+  replace_request_timeout_ms: 5000
+
+  # Periodic comparison against the venue's open-order listing. Zero disables
+  # it; startup reconciliation is separate and not optional.
+  reconciliation_interval_ms: 30000
+
+  max_orders: 1024
+  journal_enabled: true
+  journal_capacity: 65536
+
 execution:
   max_orders_per_second: 20
   max_cancels_per_second: 20

@@ -271,6 +271,28 @@ Status parse_symbol_risk(const YAML::Node& n, std::vector<SymbolRiskConfig>& out
     return Status::ok();
 }
 
+Status parse_oms(const YAML::Node& n, OmsConfigYaml& cfg) {
+    MM_RETURN_IF_ERROR(check_known_keys(
+        n, "oms",
+        {"client_id_prefix", "session_id", "max_client_id_length", "new_request_timeout_ms",
+         "cancel_request_timeout_ms", "replace_request_timeout_ms", "reconciliation_interval_ms",
+         "max_orders", "journal_capacity", "journal_enabled"}));
+    MM_RETURN_IF_ERROR(read_scalar(n, "client_id_prefix", "oms", cfg.client_id_prefix));
+    MM_RETURN_IF_ERROR(read_scalar(n, "session_id", "oms", cfg.session_id));
+    MM_RETURN_IF_ERROR(read_scalar(n, "max_client_id_length", "oms", cfg.max_client_id_length));
+    MM_RETURN_IF_ERROR(read_scalar(n, "new_request_timeout_ms", "oms", cfg.new_request_timeout_ms));
+    MM_RETURN_IF_ERROR(
+        read_scalar(n, "cancel_request_timeout_ms", "oms", cfg.cancel_request_timeout_ms));
+    MM_RETURN_IF_ERROR(
+        read_scalar(n, "replace_request_timeout_ms", "oms", cfg.replace_request_timeout_ms));
+    MM_RETURN_IF_ERROR(
+        read_scalar(n, "reconciliation_interval_ms", "oms", cfg.reconciliation_interval_ms));
+    MM_RETURN_IF_ERROR(read_scalar(n, "max_orders", "oms", cfg.max_orders));
+    MM_RETURN_IF_ERROR(read_scalar(n, "journal_capacity", "oms", cfg.journal_capacity));
+    MM_RETURN_IF_ERROR(read_scalar(n, "journal_enabled", "oms", cfg.journal_enabled));
+    return Status::ok();
+}
+
 Status parse_risk(const YAML::Node& n, RiskConfig& cfg) {
     MM_RETURN_IF_ERROR(check_known_keys(
         n, "risk",
@@ -426,7 +448,44 @@ const SymbolConfig* EngineConfig::find_symbol(std::string_view symbol) const {
     return nullptr;
 }
 
+namespace {
+
+Status validate_oms(const OmsConfigYaml& oms) {
+    if (oms.client_id_prefix.empty()) {
+        return {ErrorCode::InvalidArgument, "oms.client_id_prefix must not be empty"};
+    }
+    if (oms.max_client_id_length < 8 || oms.max_client_id_length > 64) {
+        return {ErrorCode::InvalidArgument,
+                "oms.max_client_id_length must be between 8 and 64"};
+    }
+    // prefix + '-' + session(base36) + '-' + sequence(base36). If the prefix
+    // eats the budget, id generation fails at the worst possible moment --
+    // when the engine is trying to place an order.
+    if (oms.client_id_prefix.size() + 14 > oms.max_client_id_length) {
+        return {ErrorCode::InvalidArgument,
+                "oms.client_id_prefix leaves no room for a session and sequence within "
+                "oms.max_client_id_length"};
+    }
+    if (oms.new_request_timeout_ms == 0 || oms.cancel_request_timeout_ms == 0 ||
+        oms.replace_request_timeout_ms == 0) {
+        // A zero timeout would mark every request Unknown the instant it was
+        // sent, which is indistinguishable from a permanently broken venue.
+        return {ErrorCode::InvalidArgument, "oms request timeouts must be positive"};
+    }
+    if (oms.max_orders == 0) {
+        return {ErrorCode::InvalidArgument, "oms.max_orders must be positive"};
+    }
+    if (oms.journal_enabled && oms.journal_capacity == 0) {
+        return {ErrorCode::InvalidArgument,
+                "oms.journal_enabled is true but oms.journal_capacity is zero"};
+    }
+    return Status::ok();
+}
+
+}  // namespace
+
 Status EngineConfig::validate() const {
+    MM_RETURN_IF_ERROR(validate_oms(oms));
     if (symbols.empty()) {
         return {ErrorCode::InvalidArgument, "no symbols configured"};
     }
@@ -641,7 +700,7 @@ Result<EngineConfig> load_config_string(const std::string& yaml_text) {
     MM_RETURN_IF_ERROR_RESULT(check_known_keys(
         root, "",
         {"mode", "session_name", "exchange", "symbols", "strategy", "risk", "execution", "safety",
-         "paper", "monitoring", "persistence", "logging", "io", "strategies", "quote"}));
+         "paper", "monitoring", "persistence", "logging", "io", "strategies", "quote", "oms"}));
 
     EngineConfig cfg;
 
@@ -673,6 +732,7 @@ Result<EngineConfig> load_config_string(const std::string& yaml_text) {
     }
     MM_RETURN_IF_ERROR_RESULT(parse_quote(root["quote"], cfg.quote));
     MM_RETURN_IF_ERROR_RESULT(parse_risk(root["risk"], cfg.risk));
+    MM_RETURN_IF_ERROR_RESULT(parse_oms(root["oms"], cfg.oms));
     MM_RETURN_IF_ERROR_RESULT(parse_execution(root["execution"], cfg.execution));
     MM_RETURN_IF_ERROR_RESULT(parse_safety(root["safety"], cfg.safety));
     MM_RETURN_IF_ERROR_RESULT(parse_paper(root["paper"], cfg.paper));

@@ -19,6 +19,41 @@ namespace mm::risk {
 
 using quote::OrderAction;
 
+class RiskEngine;
+
+/// Proof that an action passed risk.
+///
+/// The OMS accepts only this type, never a bare `OrderAction`. That is what
+/// makes the risk boundary impossible to route around: a caller cannot
+/// construct an approved action, because only `RiskEngine` can set the flag
+/// that makes one valid.
+///
+/// It is deliberately default-constructible -- it has to be, to stay trivially
+/// copyable and to live inside a `RiskDecision` -- but a default-constructed
+/// one is invalid, and the OMS refuses it. This is an architectural boundary,
+/// not a cryptographic one: it stops a mistake, not an adversary with a
+/// debugger, which is the threat that actually matters inside one process.
+class ApprovedAction {
+public:
+    ApprovedAction() = default;
+
+    [[nodiscard]] const OrderAction& action() const noexcept { return action_; }
+    /// False for anything not produced by `RiskEngine`.
+    [[nodiscard]] bool is_valid() const noexcept { return valid_; }
+    /// The risk decision's sequence, so an approval can be tied to the record
+    /// that granted it.
+    [[nodiscard]] std::uint64_t approval_sequence() const noexcept { return sequence_; }
+
+private:
+    friend class RiskEngine;
+
+    OrderAction action_{};
+    std::uint64_t sequence_ = 0;
+    bool valid_ = false;
+};
+
+static_assert(std::is_trivially_copyable_v<ApprovedAction>);
+
 /// The limit values a decision was measured against, captured so the record
 /// remains meaningful after the configuration changes.
 struct LimitContext {
@@ -41,6 +76,11 @@ struct RiskDecision {
     /// reduced quantity on Reduce; a Noop on Reject, so a caller that ignores
     /// the verdict and forwards `approved` blindly still sends nothing.
     OrderAction approved{};
+
+    /// The token the OMS requires. Valid only when this decision approved the
+    /// action; a rejected decision carries an invalid one, so forwarding it
+    /// achieves nothing.
+    ApprovedAction approval{};
 
     LimitContext limits{};
 

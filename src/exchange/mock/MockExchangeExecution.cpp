@@ -141,6 +141,15 @@ CancelBehaviour MockExchangeExecution::take_cancel_behaviour() {
     return default_cancel_;
 }
 
+ReplaceBehaviour MockExchangeExecution::take_replace_behaviour() {
+    if (!scripted_replaces_.empty()) {
+        const ReplaceBehaviour b = scripted_replaces_.front();
+        scripted_replaces_.pop_front();
+        return b;
+    }
+    return default_replace_;
+}
+
 Status MockExchangeExecution::submit(const OrderRequest& request) {
     if (!started_) {
         return {ErrorCode::FailedPrecondition, "execution adapter not started"};
@@ -326,8 +335,14 @@ Status MockExchangeExecution::replace(const ReplaceRequest& request) {
     if (!started_ || connection_ != ConnectionState::Connected) {
         return {ErrorCode::Unavailable, "not connected"};
     }
+    const ReplaceBehaviour behaviour = take_replace_behaviour();
+    if (behaviour == ReplaceBehaviour::Timeout) {
+        pending_.push_back(request.original_client_order_id);
+        return Status::ok();
+    }
+
     const auto it = orders_.find(request.original_client_order_id);
-    if (it == orders_.end()) {
+    if (it == orders_.end() || behaviour == ReplaceBehaviour::NotFound) {
         ExecutionEvent e = make_event(ExecutionEventType::OrderReplace);
         e.payload.replace.original_client_order_id = request.original_client_order_id;
         e.payload.replace.new_client_order_id = request.new_client_order_id;
@@ -335,6 +350,24 @@ Status MockExchangeExecution::replace(const ReplaceRequest& request) {
         e.payload.replace.accepted = false;
         e.payload.replace.error = ExchangeError::make(ExchangeErrorCategory::UnknownOrderState,
                                                       RequestOutcome::Unknown, "no such order");
+        schedule(ack_latency_, e);
+        return Status::ok();
+    }
+
+    if (behaviour == ReplaceBehaviour::Reject) {
+        // The amendment is refused; the original order keeps its identity, its
+        // price and its place in the queue.
+        ExecutionEvent e = make_event(ExecutionEventType::OrderReplace);
+        e.payload.replace.original_client_order_id = request.original_client_order_id;
+        e.payload.replace.new_client_order_id = request.new_client_order_id;
+        e.payload.replace.symbol = request.symbol;
+        e.payload.replace.symbol_id = request.symbol_id;
+        e.payload.replace.accepted = false;
+        e.payload.replace.error = ExchangeError::make(
+            ExchangeErrorCategory::ExchangeRejection, RequestOutcome::Rejected, "replace refused");
+        e.payload.replace.trace = request.trace;
+        e.payload.replace.seq = ++seq_;
+        e.payload.replace.transact_ns = clock_.wall();
         schedule(ack_latency_, e);
         return Status::ok();
     }
@@ -637,8 +670,87 @@ void MockExchangeExecution::deliver_position(const Symbol& symbol, Qty net_quant
     emit_now(e);
 }
 
-std::size_t MockExchangeExecution::pump() {
+Status MockExchangeExecution::deliver_late_ack(const ClientOrderId& id) {
     if (sink_ == nullptr) {
+        return {ErrorCode::Unavailable, "not started"};
+    }
+    ExecutionEvent e = make_event(ExecutionEventType::OrderAck);
+    e.payload.ack.client_order_id = id;
+    e.payload.ack.status = OrderStatus::New;
+    e.payload.ack.seq = ++seq_;
+    e.payload.ack.transact_ns = clock_.wall();
+    const auto it = orders_.find(id);
+    if (it != orders_.end()) {
+        e.payload.ack.exchange_order_id = it->second.exchange_id;
+        e.payload.ack.symbol = it->second.request.symbol;
+        e.payload.ack.symbol_id = it->second.request.symbol_id;
+        e.payload.ack.side = it->second.request.side;
+        e.payload.ack.price = it->second.request.price;
+        e.payload.ack.original_qty = it->second.request.quantity;
+        e.payload.ack.cumulative_qty = it->second.cumulative;
+    } else {
+        // The venue no longer has the order -- it was rejected or removed --
+        // and is redelivering an acknowledgement anyway. Real private streams
+        // do this after a reconnect replays their buffer.
+        e.payload.ack.exchange_order_id = next_exchange_id();
+        e.payload.ack.symbol = Symbol("BTCUSDT");
+        e.payload.ack.side = Side::Buy;
+        if (!Px::parse("60000.00", e.payload.ack.price) ||
+            !Qty::parse("1", e.payload.ack.original_qty)) {
+            return {ErrorCode::Internal, "fixture parse failed"};
+        }
+    }
+    emit_now(e);
+    return Status::ok();
+}
+
+Status MockExchangeExecution::deliver_fill_unchecked(const ClientOrderId& id, Px price, Qty quantity,
+                                                     const TradeId& trade_id) {
+    if (sink_ == nullptr) {
+        return {ErrorCode::Unavailable, "not started"};
+    }
+    // Deliberately skips the mock's own consistency checks so a test can
+    // deliver a fill larger than the order it belongs to. Venues have shipped
+    // exactly this; the OMS must not absorb it.
+    ExecutionEvent e = make_event(ExecutionEventType::Fill);
+    e.payload.fill.client_order_id = id;
+    e.payload.fill.trade_id = trade_id;
+    e.payload.fill.symbol = Symbol("BTCUSDT");
+    e.payload.fill.side = Side::Buy;
+    e.payload.fill.price = price;
+    e.payload.fill.quantity = quantity;
+    e.payload.fill.liquidity = Liquidity::Maker;
+    e.payload.fill.cumulative_qty = quantity;
+    e.payload.fill.seq = ++seq_;
+    e.payload.fill.transact_ns = clock_.wall();
+    const auto it = orders_.find(id);
+    if (it != orders_.end()) {
+        e.payload.fill.exchange_order_id = it->second.exchange_id;
+        e.payload.fill.symbol = it->second.request.symbol;
+        e.payload.fill.side = it->second.request.side;
+    }
+    emit_now(e);
+    return Status::ok();
+}
+
+Status MockExchangeExecution::deliver_event_for_unknown_order(const ClientOrderId& id) {
+    if (sink_ == nullptr) {
+        return {ErrorCode::Unavailable, "not started"};
+    }
+    ExecutionEvent e = make_event(ExecutionEventType::OrderAck);
+    e.payload.ack.client_order_id = id;
+    static_cast<void>(e.payload.ack.exchange_order_id.assign("VENUE-STRANGER"));
+    e.payload.ack.symbol = Symbol("BTCUSDT");
+    e.payload.ack.side = Side::Buy;
+    e.payload.ack.status = OrderStatus::New;
+    e.payload.ack.seq = ++seq_;
+    e.payload.ack.transact_ns = clock_.wall();
+    emit_now(e);
+    return Status::ok();
+}
+
+std::size_t MockExchangeExecution::pump() {
+    if (sink_ == nullptr || events_held_) {
         return 0;
     }
     const Nanos now = clock_.steady();

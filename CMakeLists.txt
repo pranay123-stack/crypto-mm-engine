@@ -212,6 +212,14 @@ mmx_add_module(mm_risk
   DEPS    mm_quote
 )
 
+# L4 - order management. Links mm_risk (for the approval token) and through it
+# mm_quote and mm_exchange. No adapter, no strategy implementation.
+file(GLOB_RECURSE MM_OMS_SRC CONFIGURE_DEPENDS "src/oms/*.cpp")
+mmx_add_module(mm_oms
+  SOURCES ${MM_OMS_SRC}
+  DEPS    mm_risk
+)
+
 # Strategy plug-ins.
 #
 # An OBJECT library, not a static one: a self-registering translation unit that
@@ -315,11 +323,11 @@ if(MMX_BUILD_TESTS)
     set_tests_properties(${suite} PROPERTIES TIMEOUT 300)
   endfunction()
 
-  mmx_add_test_suite(unit mm_common mm_exchange mm_orderbook mm_strategy mm_quote mm_risk mm_strategies mm_exchange_mock mm_exchange_binance)
-  mmx_add_test_suite(architecture mm_common mm_exchange mm_orderbook mm_strategy mm_quote mm_risk mm_strategies mm_exchange_mock mm_exchange_binance)
-  mmx_add_test_suite(failure mm_common mm_exchange mm_orderbook mm_strategy mm_quote mm_risk mm_strategies mm_exchange_mock mm_exchange_binance)
-  mmx_add_test_suite(strategy_swap mm_common mm_exchange mm_orderbook mm_strategy mm_quote mm_risk mm_strategies mm_exchange_mock mm_exchange_binance)
-  mmx_add_test_suite(integration mm_common mm_exchange mm_orderbook mm_strategy mm_quote mm_risk mm_strategies mm_exchange_mock mm_exchange_binance)
+  mmx_add_test_suite(unit mm_common mm_exchange mm_orderbook mm_strategy mm_quote mm_risk mm_oms mm_strategies mm_exchange_mock mm_exchange_binance)
+  mmx_add_test_suite(architecture mm_common mm_exchange mm_orderbook mm_strategy mm_quote mm_risk mm_oms mm_strategies mm_exchange_mock mm_exchange_binance)
+  mmx_add_test_suite(failure mm_common mm_exchange mm_orderbook mm_strategy mm_quote mm_risk mm_oms mm_strategies mm_exchange_mock mm_exchange_binance)
+  mmx_add_test_suite(strategy_swap mm_common mm_exchange mm_orderbook mm_strategy mm_quote mm_risk mm_oms mm_strategies mm_exchange_mock mm_exchange_binance)
+  mmx_add_test_suite(integration mm_common mm_exchange mm_orderbook mm_strategy mm_quote mm_risk mm_oms mm_strategies mm_exchange_mock mm_exchange_binance)
 
   # Acceptance tests B and F are source-level properties, not runtime ones:
   # no core file may name a venue or include an adapter header. Enforced here
@@ -344,7 +352,7 @@ if(MMX_BUILD_BENCH)
     file(GLOB_RECURSE MM_BENCH_SRC CONFIGURE_DEPENDS "benchmarks/*.cpp")
     if(MM_BENCH_SRC)
       add_executable(mm_bench ${MM_BENCH_SRC})
-      target_link_libraries(mm_bench PRIVATE mm_common mm_exchange mm_orderbook mm_strategy mm_quote mm_risk mm_strategies mm_exchange_mock mm_exchange_binance benchmark::benchmark)
+      target_link_libraries(mm_bench PRIVATE mm_common mm_exchange mm_orderbook mm_strategy mm_quote mm_risk mm_oms mm_strategies mm_exchange_mock mm_exchange_binance benchmark::benchmark)
     endif()
   else()
     message(STATUS "Google Benchmark not found - benchmarks disabled")

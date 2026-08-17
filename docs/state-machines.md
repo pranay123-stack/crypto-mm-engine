@@ -8,92 +8,113 @@ rejected rather than ignored.
 
 ## 1. Order lifecycle (owned by OMS)
 
+> Implemented in Phase 8. The full treatment — identity, ownership, event
+> ordering, reconciliation, recovery — is in [oms.md](oms.md); this section is
+> the state machine itself. The names below are the implemented ones
+> (`include/mm/oms/OrderTypes.hpp`, table in `src/oms/OrderTypes.cpp`).
+
 ```
                     ┌─────────┐
-                    │ CREATED │  allocated, client_id assigned, not sent
+                    │ CREATED │  record allocated, nothing sent
                     └────┬────┘
-                         │ submit
+                         │ request sent
                     ┌────▼────────┐
-              ┌─────│ SUBMITTING  │────┐ reject / send failure
-              │     └────┬────────┘    │
-         ack  │          │ timeout     ▼
-              │          │        ┌──────────┐        ┌──────────┐
-              │          └───────►│ UNKNOWN  │───────►│ REJECTED │
-              │                   └────┬─────┘  recon └──────────┘
-        ┌─────▼──────┐                 │ recon: found
-        │ACKNOWLEDGED│◄────────────────┘
-        └─────┬──────┘
-              │ resting on book
-        ┌─────▼──────┐   partial fill    ┌──────────────────┐
-        │   ACTIVE   │◄─────────────────►│ PARTIALLY_FILLED │
-        └──┬───┬───┬─┘                   └───┬────┬─────────┘
-           │   │   │                         │    │
-    cancel │   │   │ replace          cancel │    │ fill
-           │   │   │                         │    │
-   ┌───────▼─┐ │ ┌─▼──────────────┐          │    │
-   │ CANCEL_ │ │ │ REPLACE_PENDING│◄─────────┘    │
-   │ PENDING │ │ └─┬──────────┬───┘               │
-   └──┬───┬──┘ │   │ ack      │ reject            │
-      │   │    │   ▼          ▼                   │
-      │   │    │ (new order) (stay ACTIVE)        │
- ack  │   │ reject                                │
-      │   └──────────────► ACTIVE ◄───────────────┘
-      ▼                                            │ fully filled
- ┌───────────┐   ┌─────────┐   ┌─────────┐   ┌────▼───┐
- │ CANCELLED │   │ EXPIRED │   │REJECTED │   │ FILLED │
- └───────────┘   └─────────┘   └─────────┘   └────────┘
-      └──────────────┴─────────────┴─────────────┘
-                    terminal states
+              ┌─────│ PENDING_NEW │────┐ timeout / transport loss
+       reject │     └────┬────────┘    │
+              │          │ ack         ▼
+              ▼          │        ┌──────────┐
+        ┌──────────┐     │        │ UNKNOWN  │
+        │ REJECTED │     │        └────┬─────┘
+        └──────────┘     │             │ evidence: event,
+                         │             │ reconciliation, resolve()
+                    ┌────▼────┐◄───────┘
+                    │ WORKING │
+                    └──┬───┬──┘
+                       │   │ partial fill    ┌──────────────────┐
+                       │   └────────────────►│ PARTIALLY_FILLED │
+                       │                     └───┬────┬─────────┘
+        cancel/replace │                  cancel │    │ fill
+                 ┌─────▼──────────┐              │    │
+                 │ PENDING_CANCEL │◄─────────────┘    │
+                 │ PENDING_REPLACE│                   │
+                 └──┬──┬──┬───┬───┘                   │
+        confirmed   │  │  │   │ rejected              │
+                    │  │  │   └──────► WORKING        │
+                    │  │  │ filled (cancel lost race) │
+                    │  │  └───────────────────────────┤
+                    ▼  ▼                              ▼
+             ┌───────────┐  ┌─────────┐  ┌─────────┐  ┌────────┐
+             │ CANCELLED │  │ EXPIRED │  │REJECTED │  │ FILLED │
+             └───────────┘  └─────────┘  └─────────┘  └────────┘
+                    └────────────┴────────────┴────────────┘
+                                terminal states
+
+  ORPHANED: reachable from anywhere; an order at the venue we cannot attribute.
+            Leaves only to CANCELLED or UNKNOWN, by operator or reconciliation.
 ```
 
 ### Rules
 
 1. **Terminal is terminal.** `FILLED`, `CANCELLED`, `REJECTED`, `EXPIRED` accept
-   no outbound transition. A late event for a terminal order is recorded as a
-   duplicate/late event and discarded — it never resurrects the order.
+   no outbound transition. A late event for a terminal order is counted as a
+   duplicate and discarded — it never resurrects the order.
 2. **`UNKNOWN` is live for risk.** An order in `UNKNOWN` counts fully against
-   position, notional, and order-count limits. The assumption that costs money
-   is "it probably didn't make it"; the assumption that is safe is "it might be
-   working".
-3. **Fills are idempotent.** Each fill carries an exchange trade id. The OMS
-   keeps a per-order set of seen trade ids; a repeat is counted as a duplicate
-   and does not touch position or PnL. This is the single most important
-   invariant in the accounting path — Binance *will* redeliver execution reports
-   after a user-stream reconnect.
-4. **Monotonic filled quantity.** `cum_qty` may only increase, and may never
-   exceed `orig_qty`. A report violating either is rejected and trips
-   reconciliation.
-5. **Out-of-order events.** Every report carries the exchange's update sequence
-   (`E`/`u` on Binance). A report older than the order's last applied sequence is
-   discarded as stale.
-6. **Cancel is a request, not a result.** `CANCEL_PENDING` does not decrement
+   position, notional and order-count limits, and makes
+   `ExposureSnapshot::determinate` false. The assumption that costs money is "it
+   probably didn't make it"; the safe assumption is "it might be working".
+3. **Fills are idempotent.** Each fill carries a venue trade id. Every order
+   keeps a 32-entry ring of seen trade ids; a repeat is counted as a duplicate
+   and touches nothing. This is the single most important invariant in the
+   accounting path — Binance *will* redeliver execution reports after a
+   user-stream reconnect. The ring reports when it wraps, so "we may no longer
+   detect a duplicate" is visible rather than assumed away.
+4. **Monotonic filled quantity.** Cumulative quantity may only increase and may
+   never exceed the original. A report violating either is **quarantined, not
+   clamped** — clamping would leave us believing we hold less than we do.
+5. **Out-of-order events.** Every report carries the venue's update sequence. A
+   report older than the order's last applied sequence is discarded as stale. A
+   second acknowledgement for an already-acknowledged order is counted as a
+   duplicate, not as an illegal transition: nothing illegal happened, the event
+   simply carried no news.
+6. **Cancel is a request, not a result.** `PENDING_CANCEL` does not release
    exposure. Exposure drops on a confirmed `CANCELLED`. A cancel reject returns
-   the order to `ACTIVE` — it is still working.
-7. **Replace is modeled as atomic-or-nothing.** On venues where replace is not
-   atomic, the adapter decomposes it into cancel→submit and the OMS tracks two
-   orders with a linkage id; exposure is the *union* during the window, never
-   the difference.
+   the order to `WORKING` — it is still resting.
+7. **Replace is atomic-or-nothing.** Where a venue has no atomic replace, the
+   *quote manager* decomposes it consciously into `CancelThenNew`
+   (quote-manager.md §4) rather than the adapter doing it silently, and the OMS
+   enforces the boundary: the new order is created only after the cancel is
+   confirmed. During any such window exposure is the *union* of both orders,
+   never the difference.
 
-### Transition table (excerpt — full table in `oms/OrderStateMachine.cpp`)
+### Transition table (full table in `src/oms/OrderTypes.cpp`)
 
-| From               | Event              | To                 | Side effect                    |
-| ------------------ | ------------------ | ------------------ | ------------------------------ |
-| CREATED            | Submit             | SUBMITTING         | reserve risk, journal          |
-| SUBMITTING         | Ack                | ACKNOWLEDGED       | bind exchange id               |
-| SUBMITTING         | Reject             | REJECTED           | release risk                   |
-| SUBMITTING         | SendFailure        | UNKNOWN            | schedule reconcile             |
-| SUBMITTING         | AckTimeout         | UNKNOWN            | schedule reconcile             |
-| ACKNOWLEDGED       | New                | ACTIVE             | —                              |
-| ACTIVE             | PartialFill        | PARTIALLY_FILLED   | apply fill, position, PnL      |
-| ACTIVE             | Fill               | FILLED             | apply fill, release risk       |
-| ACTIVE             | CancelRequest      | CANCEL_PENDING     | —                              |
-| CANCEL_PENDING     | Cancelled          | CANCELLED          | release risk                   |
-| CANCEL_PENDING     | CancelReject       | ACTIVE             | count, maybe retry             |
-| CANCEL_PENDING     | Fill               | FILLED             | apply fill (cancel lost race)  |
-| PARTIALLY_FILLED   | Cancelled          | CANCELLED          | release remaining              |
-| UNKNOWN            | ReconFound(state)  | mapped state       | resync                         |
-| UNKNOWN            | ReconAbsent        | REJECTED           | release risk                   |
-| *any terminal*     | *any*              | *no change*        | count `late_event`             |
+| From | Event | To | Side effect |
+| --- | --- | --- | --- |
+| CREATED | RequestSent | PENDING_NEW | mint client id, journal |
+| PENDING_NEW | Acknowledged | WORKING | bind exchange id |
+| PENDING_NEW | Rejected | REJECTED | release exposure |
+| PENDING_NEW | RequestFailed | UNKNOWN | flag indeterminate exposure |
+| PENDING_NEW | RequestTimedOut | UNKNOWN | flag indeterminate exposure |
+| WORKING | PartiallyFilled | PARTIALLY_FILLED | apply fill, update VWAP |
+| WORKING | Filled | FILLED | apply fill, release exposure |
+| WORKING | CancelRequested | PENDING_CANCEL | exposure unchanged |
+| WORKING | ReplaceRequested | PENDING_REPLACE | live params unchanged |
+| PENDING_CANCEL | Cancelled | CANCELLED | release exposure; release deferred new |
+| PENDING_CANCEL | CancelRejected | WORKING | discard any deferred new |
+| PENDING_CANCEL | Filled | FILLED | apply fill (cancel lost the race) |
+| PENDING_REPLACE | Replaced | WORKING | swap price, qty, both ids |
+| PENDING_REPLACE | ReplaceRejected | WORKING | live params untouched |
+| PARTIALLY_FILLED | Cancelled | CANCELLED | release remaining |
+| UNKNOWN | *any execution event* | mapped state | resync |
+| UNKNOWN | ReconciliationAbsent | **UNKNOWN** | reported; **never** fabricated terminal |
+| *any live state* | ReconciliationAbsent | UNKNOWN | complete listing contradicts us |
+| *any terminal* | *any* | *no change* | count duplicate/illegal |
+
+> An earlier draft of this table mapped "reconciliation could not find the
+> order" to `REJECTED`. That is exactly the fabrication invariant 5 forbids: a
+> venue's silence about an order is not a report that it was refused. The
+> implemented behaviour is `UNKNOWN`, which keeps the exposure and demands
+> evidence.
 
 ---
 

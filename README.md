@@ -8,12 +8,14 @@ parameter optimization, and no alpha research. The separate quant research
 platform owns those and hands this one a finalized strategy module plus its
 validated parameters.
 
-> **Status: PHASE 7 OF 16 COMPLETE — NOT PRODUCTION READY.**
-> The pipeline runs from live market data to risk-approved order actions: the
+> **Status: PHASE 8 OF 16 COMPLETE — NOT PRODUCTION READY.**
+> The pipeline runs from live market data to a tracked order lifecycle: the
 > Binance adapter synchronizes a real book, a strategy runs inside a runtime that
-> contains it, the quote manager turns intent into desired order state, and the
-> risk engine decides what is permitted. **Nothing can place an order** — no OMS
-> and no execution path exists yet. See [Status](#status).
+> contains it, the quote manager turns intent into desired order state, the risk
+> engine decides what is permitted, and the OMS owns what happens to an order
+> afterwards. **Nothing can reach a real venue with an order** — no venue
+> execution adapter and no paper execution exist yet, so the only implementation
+> the OMS can talk to is the test mock. See [Status](#status).
 
 ---
 
@@ -144,6 +146,7 @@ strategy:
 | [strategy-runtime.md](docs/strategy-runtime.md) | plug-in contract, lifecycle, replacement, failure behaviour |
 | [quote-manager.md](docs/quote-manager.md)       | diff algorithm, ownership, generations, churn controls |
 | [risk-engine.md](docs/risk-engine.md)           | exposure mathematics, fail-closed rules, kill switch |
+| [oms.md](docs/oms.md)                           | order identity, lifecycle, reconciliation, recovery, invariants |
 | [benchmarks.md](docs/benchmarks.md)             | measured numbers and what they imply      |
 
 ## Status
@@ -212,9 +215,27 @@ Implemented and verified:
   580 tests, 49 benchmarks. Contains no exchange code, no strategy logic and no
   order management, enforced by the boundary checker.
 
+- **Phase 8 — Order management system.** The single authoritative owner of order
+  lifecycle state. Three never-conflated identities, a twelve-state machine with
+  a legality table, trade-id fill idempotency with checked VWAP, exposure that
+  counts anything possibly resting, an enforced cancel-then-new boundary,
+  reconciliation that refuses incomplete snapshots and turns a missing order into
+  `UNKNOWN` rather than a cancellation, timeouts that admit ignorance instead of
+  inventing an outcome, and restart recovery that distrusts every in-flight
+  request.
+
+  Risk cannot be bypassed by construction: `submit()` accepts only a
+  `risk::ApprovedAction`, whose validity flag only `RiskEngine` can set. Twelve
+  invariants are enforced and re-checked after every event in a generated-sequence
+  sweep. Contains no venue code, no strategy logic and no market data, enforced by
+  the boundary checker — including a check that paper and live never branch inside
+  the OMS.
+
+  648 tests, 75 benchmarks.
+
 Not yet implemented — every one of these is currently absent, not partial:
 
-Phase 8 OMS · Phase 9
+Phase 9
 paper execution · Phase 10 portfolio/PnL · Phase 11 reconciliation & recovery ·
 Phase 12 Binance live execution · Phase 13 operations dashboard · Phase 14
 failure hardening · Phase 15 performance hardening · Phase 16 deployment.

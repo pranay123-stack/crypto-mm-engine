@@ -55,6 +55,20 @@ enum class CancelBehaviour : std::uint8_t {
     Timeout,
 };
 
+/// Phase 8 (§39). Replace has its own outcomes: a venue can refuse the
+/// amendment while leaving the original order exactly where it is.
+enum class ReplaceBehaviour : std::uint8_t {
+    /// The amendment is applied and a new venue identity is issued.
+    Accept,
+    /// Refused. The original order is untouched and still working.
+    Reject,
+    /// The venue has never heard of the order being amended.
+    NotFound,
+    /// No answer at all.
+    Timeout,
+};
+
+
 /// Capabilities of a venue that supports essentially everything, so tests opt
 /// out of features rather than in.
 [[nodiscard]] ExchangeCapabilities permissive_mock_capabilities() noexcept;
@@ -92,10 +106,12 @@ public:
 
     void set_default_submit_behaviour(SubmitBehaviour b) noexcept { default_submit_ = b; }
     void set_default_cancel_behaviour(CancelBehaviour b) noexcept { default_cancel_ = b; }
+    void set_default_replace_behaviour(ReplaceBehaviour b) noexcept { default_replace_ = b; }
 
     /// Queued one-shot overrides, consumed in order before the default applies.
     void script_submit(SubmitBehaviour b) { scripted_submits_.push_back(b); }
     void script_cancel(CancelBehaviour b) { scripted_cancels_.push_back(b); }
+    void script_replace(ReplaceBehaviour b) { scripted_replaces_.push_back(b); }
 
     void set_reject_reason(RejectReason r) noexcept { reject_reason_ = r; }
     void set_ack_latency(Nanos ns) noexcept { ack_latency_ = ns; }
@@ -119,6 +135,25 @@ public:
     /// Re-sends the most recent event verbatim. Venues do this after a private
     /// stream reconnect, and the OMS must be idempotent against it.
     [[nodiscard]] Status redeliver_last_event();
+
+    /// Phase 8 (§39). Emits an acknowledgement for an order the venue has
+    /// already reported on, so a test can deliver events in an order the OMS
+    /// would never have produced -- the late ack that arrives after its own
+    /// fill. Real venues do this whenever two streams race.
+    [[nodiscard]] Status deliver_late_ack(const ClientOrderId& id);
+
+    /// Phase 8 (§39). Emits a fill without the mock's own sanity checks, so a
+    /// test can deliver one larger than the order it claims to fill.
+    [[nodiscard]] Status deliver_fill_unchecked(const ClientOrderId& id, Px price, Qty quantity,
+                                                const TradeId& trade_id);
+
+    /// Phase 8 (§39). Emits an event naming a client order id the engine never
+    /// issued. Nothing local should move as a result.
+    [[nodiscard]] Status deliver_event_for_unknown_order(const ClientOrderId& id);
+
+    /// Holds every scheduled event until released, so a test can control the
+    /// exact delivery order of events the venue produced independently.
+    void hold_events(bool held) noexcept { events_held_ = held; }
 
     void deliver_balance(const Asset& asset, Qty free, Qty locked);
     void deliver_position(const Symbol& symbol, Qty net_quantity, Px average_entry);
@@ -163,6 +198,7 @@ private:
     [[nodiscard]] TradeId next_trade_id();
     [[nodiscard]] SubmitBehaviour take_submit_behaviour();
     [[nodiscard]] CancelBehaviour take_cancel_behaviour();
+    [[nodiscard]] ReplaceBehaviour take_replace_behaviour();
     void stamp(ExecutionEvent& event) const;
 
     ManualClock& clock_;
@@ -175,8 +211,10 @@ private:
 
     SubmitBehaviour default_submit_ = SubmitBehaviour::Ack;
     CancelBehaviour default_cancel_ = CancelBehaviour::Accept;
+    ReplaceBehaviour default_replace_ = ReplaceBehaviour::Accept;
     std::deque<SubmitBehaviour> scripted_submits_;
     std::deque<CancelBehaviour> scripted_cancels_;
+    std::deque<ReplaceBehaviour> scripted_replaces_;
     RejectReason reject_reason_ = RejectReason::InsufficientBalance;
 
     Nanos ack_latency_ = micros(500);
@@ -194,6 +232,7 @@ private:
     std::uint64_t received_submits_ = 0;
     ExecutionEvent last_event_{};
     bool has_last_event_ = false;
+    bool events_held_ = false;
 };
 
 }  // namespace mm::exchange::mock

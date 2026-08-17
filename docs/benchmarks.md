@@ -276,8 +276,112 @@ Strategy runtime 132 ns + quote manager 152 ns + risk ~271 ns ≈ **555 ns** fro
 market event to an approved order action, against a cross-thread ring hop of
 40 ns and a network path measured in tens of microseconds.
 
+
+## Phase 8 — OMS
+
+Same machine, `-DCMAKE_BUILD_TYPE=Release`, pinned with `taskset -c 2`,
+`--benchmark_min_time=0.4s`, taken at a 1-minute load average of ~2.
+
+**These are indicative, not a latency contract, and the margin is larger than
+usual.** This is a shared desktop, and repeating the identical run later at a
+load average of ~24 produced figures **6-8x higher across every single
+benchmark** — `OmsSubmitNew/4` read 4903 ns against 602 ns, `OmsWorkingState/16`
+1104 ns against 171 ns. Taking the minimum across seven repetitions did not
+rescue it, which says the contention was continuous rather than intermittent.
+
+So the honest statement is: the *ratios* below are meaningful (they were all
+measured under the same conditions, and the scaling with order count is
+reproducible), and the absolute values are an estimate of the uncontended cost
+that a quiet machine would need to confirm. Nothing in the engine asserts a
+latency number derived from these.
+
+| Benchmark | Time | What it covers |
+| --- | --- | --- |
+| `OmsLegalTransitionCheck` | 5.27 ns | the transition-legality table |
+| `OmsDuplicateTradeIdLookup` | 84.0 ns | a 32-entry trade-id ring, mixed hits and misses |
+| `OmsSubmitNew` / 4 resident | 602 ns | approval → identity → journal → adapter call |
+| `OmsSubmitNew` / 32 resident | 843 ns | " |
+| `OmsSubmitNew` / 256 resident | 2777 ns | " |
+| `OmsProcessAcknowledgement` | ~1010 ns | drain the ring, attribute, transition |
+| `OmsProcessFill` | 854 ns | attribute, dedupe, VWAP, transition |
+| `OmsLookupByClientId` / 16 · 256 · 1024 | 23.6 · 33.4 · 36.0 ns | reconciliation's per-row lookup |
+| `OmsReconcile` / 16 · 256 · 1024 | 0.88 · 16.0 · 74.4 µs | full snapshot comparison |
+| `OmsWorkingState` / 16 · 256 · 1024 | 171 ns · 1.98 · 7.57 µs | what the quote manager reads each cycle |
+| `OmsExposure` / 16 · 256 · 1024 | 290 ns · 4.27 · 17.5 µs | what risk reads each cycle |
+
+### The scan cost is a record-layout cost
+
+`OmsWorkingState` and `OmsExposure` are linear in resident orders, and the slope
+is steeper than the work justifies. The cause is measurable rather than
+mysterious:
+
+```
+sizeof(OrderRecord)  = 1472 bytes
+  of which SeenTradeIds = 1112 bytes   (32 × 34-byte trade ids)
+```
+
+Every scan walks 1472 bytes per order to read a symbol, an owner, a state and
+two quantities — about 360 bytes of live data. 1024 orders × 1472 B ≈ 1.5 MB,
+and 1.5 MB at this machine's L2/L3 bandwidth is almost exactly the 7.57 µs
+measured. The number is not a mystery; it is the record size.
+
+**Not changed in this phase, deliberately.** The duplicate-trade-id ring is cold
+data — read only in `apply_fill` — sitting on three hot scan paths, and moving it
+into a parallel array would cut the scanned footprint roughly 4×. But a market
+maker's resident set is tens of orders, not thousands: at 16 orders the same
+publication costs 171 ns, which is noise next to the 40 ns ring hop and the
+tens of microseconds of network path. Phase 8's instruction was to avoid
+restructuring data before measuring, and having now measured, the honest
+conclusion is that the cost does not bind at realistic sizes. The split is
+recorded here so that if a deployment ever holds hundreds of resident orders,
+the fix is already identified rather than rediscovered.
+
+### One scan that was worth removing
+
+Looking at the scan costs above prompted a read of the other full-table walks,
+which turned up `release_deferred()` iterating all `max_orders` deferral slots on
+**every** order resolution — 221 KB at the shipped `max_orders: 1024`, to almost
+always find nothing, since deferrals exist only during a cancel-then-new window.
+An occupancy counter short-circuits it. That one was found by reading rather than
+by measuring; the benchmarks are what made anybody look.
+
+### Two benchmarks that were measuring the wrong thing
+
+The first run reported `OmsReconcile` at 11–12 ns regardless of size, and
+`OmsWorkingState` getting *faster* as the order count grew. Both were false.
+`populate()` advanced the clock by 1 µs against a mock acknowledgement latency of
+500 µs, so no order in any fixture ever reached `WORKING`: reconciliation was
+comparing against an empty snapshot, and the working-state scan was matching
+nothing. The tell was `items_per_second=0`, which is not a plausible measurement.
+
+The fixtures now assert they produced live orders and `SkipWithError` if they did
+not, because a benchmark that silently measures an empty table reports a very
+good number.
+
+The first `OmsSubmitNew` also read 24 µs. Two causes, both benchmark bugs rather
+than engine ones: the resident set grew by 4096 orders during the timed window
+so the average was dominated by the tail, and the mock adapter's own map inserts
+and event scheduling were inside the timed region. Submit is now measured at a
+fixed resident size against a do-nothing adapter, which is what "the cost of a
+submit" should mean.
+
+### The full pipeline, steady state
+
+Strategy runtime 132 ns + quote manager 152 ns + risk ~271 ns + OMS submit
+~602 ns ≈ **1.16 µs** from market event to a request handed to an adapter,
+against a cross-thread ring hop of 40 ns and a network path measured in tens of
+microseconds.
+
+The components were measured in different phases under different machine load,
+so this sum is an order-of-magnitude statement rather than an addition of
+comparable quantities. What it establishes is the thing that matters for design:
+the engine's own cost is a small fraction of the network path, so correctness in
+the lifecycle is worth more than nanoseconds in it. An end-to-end tick-to-trade
+benchmark — one measurement, one set of conditions — is listed below as not yet
+done, and is what would actually settle the number.
+
 ## Not yet benchmarked
 
 These arrive with their phases and are listed so the gaps are explicit:
 
-OMS state transition · order serialization · end-to-end tick-to-trade.
+order serialization · end-to-end tick-to-trade.

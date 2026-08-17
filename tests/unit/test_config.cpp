@@ -324,3 +324,83 @@ TEST(Config, FindSymbol) {
 
 }  // namespace
 }  // namespace mm
+
+namespace mm {
+namespace {
+
+/// Phase 8 §38. The OMS block, and the settings that must not be accepted.
+TEST(OmsConfig, DefaultsAreSafeAndTimeoutsAreExpressedInMilliseconds) {
+    const EngineConfig cfg;
+    EXPECT_EQ(cfg.oms.client_id_prefix, "mm");
+    EXPECT_EQ(cfg.oms.max_client_id_length, 36U);
+    EXPECT_GT(cfg.oms.new_request_timeout_ms, 0U);
+    EXPECT_GT(cfg.oms.cancel_request_timeout_ms, 0U);
+    EXPECT_GT(cfg.oms.replace_request_timeout_ms, 0U);
+    EXPECT_TRUE(cfg.oms.journal_enabled);
+}
+
+TEST(OmsConfig, UnknownKeyIsAHardError) {
+    const auto result = load_config_string(R"(
+mode: paper
+symbols: [{symbol: BTCUSDT}]
+oms:
+  client_id_prefix: "mm"
+  reconcilliation_interval_ms: 1000
+)");
+    ASSERT_TRUE(result.is_error());
+    EXPECT_NE(result.status().message().find("reconcilliation_interval_ms"), std::string::npos)
+        << result.status().message();
+}
+
+TEST(OmsConfig, ZeroTimeoutIsRefused) {
+    const auto result = load_config_string(R"(
+mode: paper
+symbols: [{symbol: BTCUSDT}]
+oms:
+  new_request_timeout_ms: 0
+)");
+    // A zero timeout marks every request unknown the instant it is sent.
+    ASSERT_TRUE(result.is_error());
+    EXPECT_NE(result.status().message().find("timeouts must be positive"), std::string::npos)
+        << result.status().message();
+}
+
+TEST(OmsConfig, PrefixThatCannotFitAnIdIsRefused) {
+    const auto result = load_config_string(R"(
+mode: paper
+symbols: [{symbol: BTCUSDT}]
+oms:
+  client_id_prefix: "a_very_long_prefix_indeed_here"
+  max_client_id_length: 36
+)");
+    // Better to fail at startup than to fail minting an id mid-session.
+    ASSERT_TRUE(result.is_error());
+    EXPECT_NE(result.status().message().find("client_id_prefix"), std::string::npos)
+        << result.status().message();
+}
+
+TEST(OmsConfig, JournalEnabledWithZeroCapacityIsRefused) {
+    const auto result = load_config_string(R"(
+mode: paper
+symbols: [{symbol: BTCUSDT}]
+oms:
+  journal_enabled: true
+  journal_capacity: 0
+)");
+    ASSERT_TRUE(result.is_error());
+}
+
+TEST(OmsConfig, ShippedConfigsCarryDistinctSessionPrefixes) {
+    // MMX_CONFIG_DIR, not a relative path: the test must pass under ctest's
+    // working directory as well as from the repository root.
+    const auto paper = load_config_file(std::string(MMX_CONFIG_DIR) + "/paper.yaml");
+    const auto live = load_config_file(std::string(MMX_CONFIG_DIR) + "/live.yaml");
+    ASSERT_TRUE(paper.is_ok()) << paper.status().message();
+    ASSERT_TRUE(live.is_ok()) << live.status().message();
+    // Paper and live ids must be distinguishable in a venue's order listing;
+    // otherwise reconciliation cannot tell which run an orphan came from.
+    EXPECT_NE(paper.value().oms.client_id_prefix, live.value().oms.client_id_prefix);
+}
+
+}  // namespace
+}  // namespace mm

@@ -134,6 +134,8 @@ public:
 private:
     void transition(RiskState to, RiskReason reason);
     void record(const RiskDecision& decision);
+    /// Marks an approving decision's token valid. The only door to the OMS.
+    void stamp_approval(RiskDecision& decision);
 
     /// Checks that do not depend on the action's exposure: state, readiness,
     /// freshness, instrument, ownership.
@@ -166,6 +168,7 @@ private:
     RateLimiter replaces_;
     RateLimiter all_actions_;
 
+    std::uint64_t approval_sequence_ = 0;
     RiskMetrics metrics_{};
     LatencyHistogram latency_{"risk_evaluation"};
 };

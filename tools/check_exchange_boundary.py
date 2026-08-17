@@ -59,6 +59,35 @@ RISK_FORBIDDEN_INCLUDES = [
     ("strategies/", "a strategy implementation"),
     ("curl/", "networking"),
 ]
+# The OMS owns order lifecycle state and nothing else. It must not know which
+# venue it is talking to, must not contain strategy logic, and must not reach
+# into risk's internals -- risk hands it an approval token and that is the
+# whole of their coupling. It also has no business opening sockets: everything
+# it sends goes through the execution interface it was given.
+OMS_DIRS = ("include/mm/oms/", "src/oms/")
+OMS_FORBIDDEN_INCLUDES = [
+    ("boost/asio", "networking"),
+    ("boost/beast", "HTTP/WebSocket"),
+    ("openssl/", "TLS and signing"),
+    ("nlohmann/json", "venue wire formats"),
+    ("curl/", "networking"),
+    ("mm/exchange/binance/", "a venue adapter"),
+    ("mm/exchange/mock/", "a venue adapter"),
+    ("mm/exchange/paper/", "an execution adapter"),
+    ("mm/strategy/", "strategy logic"),
+    ("strategies/", "a strategy implementation"),
+    ("mm/risk/RiskEngine", "risk internals"),
+    ("mm/risk/RiskLimits", "risk internals"),
+    ("mm/dashboard/", "the dashboard"),
+    ("mm/orderbook/", "market data"),
+]
+# Phase 8 §44. Paper and live must share one OMS; the mode lives below the
+# execution interface. Deliberately narrow tokens: `is_live()` is an order's
+# liveness and must not trip this.
+OMS_MODE_TOKENS = re.compile(
+    r"\b(is_paper|paper_mode|live_mode|is_live_mode|TradingMode|kPaperMode|kLiveMode|"
+    r"PaperExchange|LiveExchange)\b"
+)
 QUOTE_FORBIDDEN_INCLUDES = [
     ("boost/asio", "networking"),
     ("boost/beast", "HTTP/WebSocket"),
@@ -176,6 +205,10 @@ def is_quote_file(rel: str) -> bool:
     return any(rel.startswith(d) for d in QUOTE_DIRS)
 
 
+def is_oms_file(rel: str) -> bool:
+    return any(rel.startswith(d) for d in OMS_DIRS)
+
+
 def is_risk_file(rel: str) -> bool:
     return any(rel.startswith(d) for d in RISK_DIRS)
 
@@ -266,6 +299,29 @@ def scan() -> int:
                             f"({capability}); the safety boundary must not reach it"
                         )
 
+        # --- Test E2: OMS capability denial (Phase 8 §37) ----------------
+        if is_oms_file(rel):
+            for lineno, line in enumerate(code.splitlines(), 1):
+                stripped = line.strip()
+                if not stripped.startswith("#include"):
+                    continue
+                for needle, capability in OMS_FORBIDDEN_INCLUDES:
+                    if needle in stripped:
+                        violations.append(
+                            f"{rel}:{lineno}: OMS includes '{needle}' "
+                            f"({capability}); the OMS owns order state and nothing else"
+                        )
+
+        # --- Test E3: no paper/live branching inside the OMS (§44) -------
+        if is_oms_file(rel):
+            for lineno, line in enumerate(code.splitlines(), 1):
+                m = OMS_MODE_TOKENS.search(line)
+                if m is not None:
+                    violations.append(
+                        f"{rel}:{lineno}: OMS references '{m.group(1)}'; paper and live "
+                        f"must differ only below the execution interface"
+                    )
+
         # --- Test F: no venue identifiers outside adapter directories ----
         if is_adapter_file(rel):
             continue
@@ -350,6 +406,27 @@ def self_test() -> int:
         '#include <boost/asio/io_context.hpp>',
         '#include "strategies/reference_mm_v1/ReferenceMarketMaker.hpp"',
     ]
+    oms_must_detect = [
+        '#include "mm/exchange/binance/BinanceExecution.hpp"',
+        '#include <boost/beast/websocket.hpp>',
+        '#include <nlohmann/json.hpp>',
+        '#include "strategies/reference_mm_v1/ReferenceMarketMaker.hpp"',
+        '#include "mm/strategy/StrategyRuntime.hpp"',
+        '#include "mm/risk/RiskEngine.hpp"',
+        '#include "mm/orderbook/OrderBook.hpp"',
+    ]
+    oms_must_ignore = [
+        # The approval token is the entire risk-to-OMS interface, and the OMS
+        # must be able to name the types it publishes for risk and the quote
+        # manager to read.
+        '#include "mm/risk/RiskDecision.hpp"',
+        '#include "mm/risk/Exposure.hpp"',
+        '#include "mm/quote/WorkingQuoteState.hpp"',
+        '#include "mm/exchange/common/ExecutionEvents.hpp"',
+        '#include "mm/exchange/IExchangeExecution.hpp"',
+        '#include "mm/common/Fixed.hpp"',
+    ]
+
     risk_must_ignore = [
         '#include "mm/quote/OrderAction.hpp"',
         '#include "mm/exchange/common/OrderRequest.hpp"',
@@ -420,15 +497,48 @@ def self_test() -> int:
         if risk_forbidden_hit(line):
             failures.append(f"false positive on a permitted risk include: {line}")
 
+    mode_must_detect = [
+        "if (is_paper) { skip_venue(); }",
+        "if (config.live_mode) { sign(request); }",
+        "TradingMode mode = TradingMode::Paper;",
+        "PaperExchange* venue = nullptr;",
+    ]
+    mode_must_ignore = [
+        # These are the OMS's own vocabulary and must never trip the check.
+        "if (order.is_live()) { ++live; }",
+        "[[nodiscard]] bool is_live(OrderState s) noexcept;",
+        "std::size_t live_order_count() const;",
+        "// paper and live share this code path",
+    ]
+    for line in mode_must_detect:
+        if OMS_MODE_TOKENS.search(line) is None:
+            failures.append(f"missed a paper/live branch in the OMS: {line}")
+    for line in mode_must_ignore:
+        if OMS_MODE_TOKENS.search(line) is not None:
+            failures.append(f"false positive on OMS liveness vocabulary: {line}")
+
+    def oms_forbidden_hit(line: str) -> bool:
+        stripped = line.strip()
+        if not stripped.startswith("#include"):
+            return False
+        return any(needle in stripped for needle, _ in OMS_FORBIDDEN_INCLUDES)
+
+    for line in oms_must_detect:
+        if not oms_forbidden_hit(line):
+            failures.append(f"missed a forbidden OMS include: {line}")
+    for line in oms_must_ignore:
+        if oms_forbidden_hit(line):
+            failures.append(f"false positive on a permitted OMS include: {line}")
+
     if failures:
         print("SELF-TEST FAILED:")
         for f in failures:
             print(f"  {f}")
         return 1
     detections = (len(must_detect) + len(strategy_must_detect) + len(quote_must_detect) +
-                  len(risk_must_detect))
+                  len(risk_must_detect) + len(oms_must_detect) + len(mode_must_detect))
     non_detections = (len(must_ignore) + len(strategy_must_ignore) + len(quote_must_ignore) +
-                      len(risk_must_ignore))
+                      len(risk_must_ignore) + len(oms_must_ignore) + len(mode_must_ignore))
     print(f"self-test: {detections} detections and {non_detections} non-detections "
           f"behave as expected")
     return 0
