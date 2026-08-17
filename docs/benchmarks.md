@@ -380,6 +380,60 @@ the lifecycle is worth more than nanoseconds in it. An end-to-end tick-to-trade
 benchmark — one measurement, one set of conditions — is listed below as not yet
 done, and is what would actually settle the number.
 
+
+## Phase 9 — paper execution
+
+Same machine, `-DCMAKE_BUILD_TYPE=Release`, pinned with `taskset -c 6`,
+`--benchmark_min_time=0.2s`, on a shared desktop. The caveat from the Phase 8
+section applies in full: **treat the ratios as meaningful and the absolute
+values as an estimate a quiet machine would need to confirm.**
+
+> **Paper execution performance is not equivalent to real exchange latency, and
+> nothing here is a measurement of any venue.** What these numbers bound is the
+> engine-side cost of running against the simulator — how much of a paper
+> session is harness rather than code under test. A real venue's round trip is
+> tens of microseconds to milliseconds of network, against which every figure
+> below is noise.
+
+| Benchmark | Time | What it covers |
+| --- | --- | --- |
+| `PaperSubmit` | 183 ns | validation, identity, queueing — no event work |
+| `PaperCancel` | 361 ns | lookup plus request queueing |
+| `PaperReplace` | 388 ns | " |
+| `PaperMatchAgainstLevels` | 329 ns | the matcher alone, 16 levels, executing |
+| `PaperLookupByClientId` / 16 · 256 · 1024 | 17.4 · 36.9 · 90.1 ns | what cancel, replace and query all pay first |
+| `PaperMatchOnMarketUpdate` / 8 · 64 · 512 resting | 186 ns · 1.37 · 11.97 µs | the scan and priority sort paid on **every** book update |
+| `PaperRequestToEvent` | 1371 ns | one request processed and its answer delivered |
+| `PaperEventPublication` / 1 · 16 · 256 | 6.83 · 17.4 · 235 µs | draining a batch of due events |
+
+### Reading these
+
+**The matching pass is linear in resting orders and is paid on every update,
+fill or no fill** — roughly 23 ns per resting order. At a market maker's real
+working set (a handful of orders) that is a rounding error; the 512 figure is
+there to make the slope visible rather than to describe a realistic load.
+
+**`PaperEventPublication/1` at 6.8 µs is mostly harness.** Each iteration
+rebuilds a venue inside `PauseTiming`, and the timer-toggle overhead dominates a
+single event. The per-event cost is better read from the 256 case: 235 µs / 256
+≈ 918 ns, which includes processing the request as well as delivering the
+answer.
+
+### Two fixtures that measured nothing
+
+Both were caught by assertions that the fixture had produced what it claimed,
+added after Phase 8's identical lesson:
+
+- `populate()` advanced the clock 10 µs per order against a 2 ms request-plus-ack
+  round trip, so no order ever reached the venue and every "N resting orders"
+  benchmark ran against an empty table.
+- `bench_order()` priced sells *below* the bid, so half of them crossed on
+  arrival and executed as takers instead of resting.
+
+The fixtures now `SkipWithError` unless they produced exactly the requested
+number of resting orders. A benchmark that silently measures an empty container
+reports a very good number.
+
 ## Not yet benchmarked
 
 These arrive with their phases and are listed so the gaps are explicit:

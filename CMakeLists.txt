@@ -262,6 +262,21 @@ if(MM_BINANCE_SRC AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     PROPERTIES COMPILE_OPTIONS "-Wno-null-dereference")
 endif()
 
+# Paper adapter. An execution simulator behind the real execution interface,
+# used to validate the OMS -> IExchangeExecution boundary before a live venue
+# exists. Links mm_orderbook because it reads the engine's normalized book --
+# the same book the strategy reads, never a second copy of market data.
+#
+# It is a peer of the future Binance adapter, not a special case: nothing above
+# it knows which of the two it is talking to.
+file(GLOB_RECURSE MM_EXCHANGE_PAPER_SRC CONFIGURE_DEPENDS "src/exchange/paper/*.cpp")
+if(MM_EXCHANGE_PAPER_SRC)
+  mmx_add_module(mm_exchange_paper
+    SOURCES ${MM_EXCHANGE_PAPER_SRC}
+    DEPS    mm_orderbook
+  )
+endif()
+
 # Mock adapter - a reference implementation of both interfaces, used by tests
 # and benchmarks. It is a peer of the future Binance adapter, not a special
 # case, which is what makes it evidence that the abstraction is implementable.
@@ -323,11 +338,11 @@ if(MMX_BUILD_TESTS)
     set_tests_properties(${suite} PROPERTIES TIMEOUT 300)
   endfunction()
 
-  mmx_add_test_suite(unit mm_common mm_exchange mm_orderbook mm_strategy mm_quote mm_risk mm_oms mm_strategies mm_exchange_mock mm_exchange_binance)
-  mmx_add_test_suite(architecture mm_common mm_exchange mm_orderbook mm_strategy mm_quote mm_risk mm_oms mm_strategies mm_exchange_mock mm_exchange_binance)
-  mmx_add_test_suite(failure mm_common mm_exchange mm_orderbook mm_strategy mm_quote mm_risk mm_oms mm_strategies mm_exchange_mock mm_exchange_binance)
-  mmx_add_test_suite(strategy_swap mm_common mm_exchange mm_orderbook mm_strategy mm_quote mm_risk mm_oms mm_strategies mm_exchange_mock mm_exchange_binance)
-  mmx_add_test_suite(integration mm_common mm_exchange mm_orderbook mm_strategy mm_quote mm_risk mm_oms mm_strategies mm_exchange_mock mm_exchange_binance)
+  mmx_add_test_suite(unit mm_common mm_exchange mm_orderbook mm_strategy mm_quote mm_risk mm_oms mm_strategies mm_exchange_mock mm_exchange_paper mm_exchange_binance)
+  mmx_add_test_suite(architecture mm_common mm_exchange mm_orderbook mm_strategy mm_quote mm_risk mm_oms mm_strategies mm_exchange_mock mm_exchange_paper mm_exchange_binance)
+  mmx_add_test_suite(failure mm_common mm_exchange mm_orderbook mm_strategy mm_quote mm_risk mm_oms mm_strategies mm_exchange_mock mm_exchange_paper mm_exchange_binance)
+  mmx_add_test_suite(strategy_swap mm_common mm_exchange mm_orderbook mm_strategy mm_quote mm_risk mm_oms mm_strategies mm_exchange_mock mm_exchange_paper mm_exchange_binance)
+  mmx_add_test_suite(integration mm_common mm_exchange mm_orderbook mm_strategy mm_quote mm_risk mm_oms mm_strategies mm_exchange_mock mm_exchange_paper mm_exchange_binance)
 
   # Acceptance tests B and F are source-level properties, not runtime ones:
   # no core file may name a venue or include an adapter header. Enforced here
@@ -352,7 +367,7 @@ if(MMX_BUILD_BENCH)
     file(GLOB_RECURSE MM_BENCH_SRC CONFIGURE_DEPENDS "benchmarks/*.cpp")
     if(MM_BENCH_SRC)
       add_executable(mm_bench ${MM_BENCH_SRC})
-      target_link_libraries(mm_bench PRIVATE mm_common mm_exchange mm_orderbook mm_strategy mm_quote mm_risk mm_oms mm_strategies mm_exchange_mock mm_exchange_binance benchmark::benchmark)
+      target_link_libraries(mm_bench PRIVATE mm_common mm_exchange mm_orderbook mm_strategy mm_quote mm_risk mm_oms mm_strategies mm_exchange_mock mm_exchange_paper mm_exchange_binance benchmark::benchmark)
     endif()
   else()
     message(STATUS "Google Benchmark not found - benchmarks disabled")

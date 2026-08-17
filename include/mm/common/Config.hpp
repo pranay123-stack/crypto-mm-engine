@@ -205,17 +205,66 @@ struct SafetyConfig {
     bool cancel_all_on_shutdown = true;
 };
 
+/// Phase 9 §38. The paper execution environment.
+///
+/// Phase 1 sketched this block with two probabilities in it
+/// (`queue_fill_ratio`, `reject_probability`). Both are gone. A simulator whose
+/// default behaviour is random produces tests that fail one run in twenty,
+/// which trains people to re-run rather than to look. Queue position is now a
+/// deterministic share of displayed size, and failures are injected by count.
 struct PaperConfig {
-    std::int64_t ack_latency_us = 2'000;
+    /// Simulated latency, in microseconds. **These are simulation values, not
+    /// measurements of any real venue**, and nothing should quote them as such.
+    std::int64_t request_latency_us = 500;
+    std::int64_t ack_latency_us = 1'500;
+    std::int64_t cancel_latency_us = 1'500;
+    std::int64_t replace_latency_us = 2'000;
     std::int64_t fill_latency_us = 1'000;
-    std::int64_t cancel_latency_us = 2'000;
+    std::int64_t query_latency_us = 5'000;
+
+    /// "displayed_liquidity" (conservative, the default) or "full_on_cross".
+    std::string fill_model = "displayed_liquidity";
+    /// "reject" (what most venues do) or "expire".
+    std::string post_only_policy = "reject";
+    /// "atomic" or "unsupported" -- the latter forces the quote manager to
+    /// decompose a replace into cancel-then-new, which is worth being able to
+    /// test against a venue that genuinely lacks it.
+    std::string replace_mode = "atomic";
+
+    /// Share of displayed size assumed available to us, in basis points.
+    /// 10000 means "always first in the queue", which is the assumption that
+    /// makes a paper run look better than reality.
+    std::int32_t queue_share_bps = 5'000;
+
+    /// A book older than this stops producing fills. Cancellation and
+    /// reconciliation continue regardless.
+    std::int64_t max_book_age_ms = 500;
+
+    std::int32_t max_orders = 1'024;
+
+    /// Reserved for optional stochastic simulation. Zero -- the default, and
+    /// the only value any test uses -- means fully deterministic.
+    std::uint64_t deterministic_seed = 0;
+
     double maker_fee_bps = 1.0;
     double taker_fee_bps = 4.0;
-    /// Probability that a resting order at the touch is filled when the book
-    /// trades through it. Modelling queue position honestly matters: assuming
-    /// every touch fill lands is how a paper run flatters a strategy.
-    double queue_fill_ratio = 0.5;
-    double reject_probability = 0.0;
+};
+
+/// Which execution environment the engine runs against.
+enum class ExecutionMode : std::uint8_t {
+    /// The simulated venue. The only implemented mode.
+    Paper,
+    /// A real venue. **No live execution adapter exists yet**; selecting this
+    /// fails at startup rather than falling back to paper, because a silent
+    /// fallback is how a run that was supposed to be live quietly is not --
+    /// or, far worse, the reverse.
+    Live,
+};
+[[nodiscard]] std::string_view to_string(ExecutionMode m) noexcept;
+[[nodiscard]] bool parse_execution_mode(std::string_view text, ExecutionMode& out) noexcept;
+
+struct ExecutionConfig {
+    ExecutionMode mode = ExecutionMode::Paper;
 };
 
 struct MonitoringConfig {
@@ -296,6 +345,7 @@ struct EngineConfig {
     std::map<std::string, Params, std::less<>> strategy_params;
     RiskConfig risk;
     OmsConfigYaml oms;
+    ExecutionConfig execution_env;
     ExecutionRateConfig execution;
     SafetyConfig safety;
     PaperConfig paper;
@@ -303,6 +353,15 @@ struct EngineConfig {
     PersistenceConfig persistence;
     LoggingConfig logging;
     IoConfig io;
+
+    /// Which execution environment will actually be built. `mode: live` implies
+    /// live execution: a file that asked for live trading and silently got a
+    /// simulator would be the worst possible surprise.
+    [[nodiscard]] ExecutionMode effective_execution_mode() const noexcept;
+
+    /// Whether that environment exists in this build. Separate from structural
+    /// validity, which must not depend on which phase the project is in.
+    [[nodiscard]] Status validate_execution_available() const;
 
     /// Structural validation, applied to every mode.
     [[nodiscard]] Status validate() const;

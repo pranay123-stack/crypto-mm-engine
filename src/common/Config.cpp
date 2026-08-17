@@ -368,17 +368,39 @@ Status parse_safety(const YAML::Node& n, SafetyConfig& cfg) {
 Status parse_paper(const YAML::Node& n, PaperConfig& cfg) {
     MM_RETURN_IF_ERROR(check_known_keys(
         n, "paper",
-        {"ack_latency_us", "fill_latency_us", "cancel_latency_us", "maker_fee_bps",
-         "taker_fee_bps", "queue_fill_ratio", "reject_probability"}));
+        {"request_latency_us", "ack_latency_us", "cancel_latency_us", "replace_latency_us",
+         "fill_latency_us", "query_latency_us", "fill_model", "post_only_policy", "replace_mode",
+         "queue_share_bps", "max_book_age_ms", "max_orders", "deterministic_seed",
+         "maker_fee_bps", "taker_fee_bps"}));
+    MM_RETURN_IF_ERROR(read_scalar(n, "request_latency_us", "paper", cfg.request_latency_us));
     MM_RETURN_IF_ERROR(read_scalar(n, "ack_latency_us", "paper", cfg.ack_latency_us));
-    MM_RETURN_IF_ERROR(read_scalar(n, "fill_latency_us", "paper", cfg.fill_latency_us));
     MM_RETURN_IF_ERROR(read_scalar(n, "cancel_latency_us", "paper", cfg.cancel_latency_us));
+    MM_RETURN_IF_ERROR(read_scalar(n, "replace_latency_us", "paper", cfg.replace_latency_us));
+    MM_RETURN_IF_ERROR(read_scalar(n, "fill_latency_us", "paper", cfg.fill_latency_us));
+    MM_RETURN_IF_ERROR(read_scalar(n, "query_latency_us", "paper", cfg.query_latency_us));
+    MM_RETURN_IF_ERROR(read_scalar(n, "fill_model", "paper", cfg.fill_model));
+    MM_RETURN_IF_ERROR(read_scalar(n, "post_only_policy", "paper", cfg.post_only_policy));
+    MM_RETURN_IF_ERROR(read_scalar(n, "replace_mode", "paper", cfg.replace_mode));
+    MM_RETURN_IF_ERROR(read_scalar(n, "queue_share_bps", "paper", cfg.queue_share_bps));
+    MM_RETURN_IF_ERROR(read_scalar(n, "max_book_age_ms", "paper", cfg.max_book_age_ms));
+    MM_RETURN_IF_ERROR(read_scalar(n, "max_orders", "paper", cfg.max_orders));
+    MM_RETURN_IF_ERROR(read_scalar(n, "deterministic_seed", "paper", cfg.deterministic_seed));
     MM_RETURN_IF_ERROR(read_scalar(n, "maker_fee_bps", "paper", cfg.maker_fee_bps));
     MM_RETURN_IF_ERROR(read_scalar(n, "taker_fee_bps", "paper", cfg.taker_fee_bps));
-    MM_RETURN_IF_ERROR(read_scalar(n, "queue_fill_ratio", "paper", cfg.queue_fill_ratio));
-    MM_RETURN_IF_ERROR(read_scalar(n, "reject_probability", "paper", cfg.reject_probability));
     return Status::ok();
 }
+
+Status parse_execution_env(const YAML::Node& n, ExecutionConfig& cfg) {
+    MM_RETURN_IF_ERROR(check_known_keys(n, "execution_env", {"mode"}));
+    std::string text = "paper";
+    MM_RETURN_IF_ERROR(read_scalar(n, "mode", "execution_env", text));
+    if (!parse_execution_mode(text, cfg.mode)) {
+        return {ErrorCode::InvalidArgument,
+                "execution_env.mode must be 'paper' or 'live', got '" + text + "'"};
+    }
+    return Status::ok();
+}
+
 
 Status parse_monitoring(const YAML::Node& n, MonitoringConfig& cfg) {
     MM_RETURN_IF_ERROR(check_known_keys(
@@ -427,6 +449,26 @@ std::string_view to_string(TradingMode m) noexcept {
     return m == TradingMode::Live ? "live" : "paper";
 }
 
+std::string_view to_string(ExecutionMode m) noexcept {
+    switch (m) {
+        case ExecutionMode::Paper: return "paper";
+        case ExecutionMode::Live:  return "live";
+    }
+    return "unknown";
+}
+
+bool parse_execution_mode(std::string_view text, ExecutionMode& out) noexcept {
+    if (text == "paper") {
+        out = ExecutionMode::Paper;
+        return true;
+    }
+    if (text == "live") {
+        out = ExecutionMode::Live;
+        return true;
+    }
+    return false;
+}
+
 bool parse_trading_mode(std::string_view text, TradingMode& out) noexcept {
     if (text == "paper") {
         out = TradingMode::Paper;
@@ -449,6 +491,36 @@ const SymbolConfig* EngineConfig::find_symbol(std::string_view symbol) const {
 }
 
 namespace {
+
+Status validate_paper(const PaperConfig& paper) {
+    if (paper.fill_model != "displayed_liquidity" && paper.fill_model != "full_on_cross") {
+        return {ErrorCode::InvalidArgument,
+                "paper.fill_model must be 'displayed_liquidity' or 'full_on_cross'"};
+    }
+    if (paper.post_only_policy != "reject" && paper.post_only_policy != "expire") {
+        return {ErrorCode::InvalidArgument,
+                "paper.post_only_policy must be 'reject' or 'expire'"};
+    }
+    if (paper.replace_mode != "atomic" && paper.replace_mode != "unsupported") {
+        return {ErrorCode::InvalidArgument, "paper.replace_mode must be 'atomic' or 'unsupported'"};
+    }
+    if (paper.queue_share_bps < 0 || paper.queue_share_bps > 10'000) {
+        return {ErrorCode::InvalidArgument, "paper.queue_share_bps must be between 0 and 10000"};
+    }
+    if (paper.request_latency_us < 0 || paper.ack_latency_us < 0 || paper.cancel_latency_us < 0 ||
+        paper.replace_latency_us < 0 || paper.fill_latency_us < 0 || paper.query_latency_us < 0) {
+        return {ErrorCode::InvalidArgument, "paper latencies must not be negative"};
+    }
+    if (paper.max_orders <= 0) {
+        return {ErrorCode::InvalidArgument, "paper.max_orders must be positive"};
+    }
+    if (paper.max_book_age_ms <= 0) {
+        // Zero would make every book stale on arrival and no fill would ever
+        // happen, which looks exactly like a broken strategy.
+        return {ErrorCode::InvalidArgument, "paper.max_book_age_ms must be positive"};
+    }
+    return Status::ok();
+}
 
 Status validate_oms(const OmsConfigYaml& oms) {
     if (oms.client_id_prefix.empty()) {
@@ -486,6 +558,11 @@ Status validate_oms(const OmsConfigYaml& oms) {
 
 Status EngineConfig::validate() const {
     MM_RETURN_IF_ERROR(validate_oms(oms));
+    MM_RETURN_IF_ERROR(validate_paper(paper));
+
+    // Structural validity is deliberately independent of which adapters happen
+    // to be implemented in this phase. Whether an execution environment can
+    // actually be built is asked separately, by validate_execution_available().
     if (symbols.empty()) {
         return {ErrorCode::InvalidArgument, "no symbols configured"};
     }
@@ -619,21 +696,39 @@ Status EngineConfig::validate() const {
     if (monitoring.enabled && (monitoring.http_port <= 0 || monitoring.http_port > 65535)) {
         return {ErrorCode::InvalidArgument, "monitoring.http_port is out of range"};
     }
-    if (paper.queue_fill_ratio < 0.0 || paper.queue_fill_ratio > 1.0) {
-        return {ErrorCode::InvalidArgument, "paper.queue_fill_ratio must be in [0, 1]"};
-    }
-    if (paper.reject_probability < 0.0 || paper.reject_probability > 1.0) {
-        return {ErrorCode::InvalidArgument, "paper.reject_probability must be in [0, 1]"};
-    }
     if (io.md_threads <= 0 || io.exec_threads <= 0) {
         return {ErrorCode::InvalidArgument, "io thread counts must be positive"};
     }
     return Status::ok();
 }
 
+Status EngineConfig::validate_execution_available() const {
+    // Phase 9 §39. There is no live execution adapter yet, and there must be no
+    // path by which paper silently becomes live or live silently becomes
+    // paper. Falling back would mean a run somebody believed was live quietly
+    // was not; the reverse mistake is the one that loses money.
+    if (effective_execution_mode() == ExecutionMode::Live) {
+        return {ErrorCode::PermissionDenied,
+                "live execution was selected, but no live execution adapter exists yet "
+                "(Phase 12). The only implemented execution environment is 'paper'."};
+    }
+    return Status::ok();
+}
+
+ExecutionMode EngineConfig::effective_execution_mode() const noexcept {
+    // `mode: live` means live execution. A file that asked for live trading
+    // and got a simulator would be the worst possible surprise, so the trading
+    // mode wins and the two can never disagree in the dangerous direction.
+    if (mode == TradingMode::Live) {
+        return ExecutionMode::Live;
+    }
+    return execution_env.mode;
+}
+
 Status EngineConfig::validate_live_gates(bool operator_confirmed_live) const {
     if (mode != TradingMode::Live) {
-        return Status::ok();
+        // A paper run still must not be able to select a live adapter.
+        return validate_execution_available();
     }
 
     // Gate 1: the config file must opt in, separately from `mode`.
@@ -683,7 +778,8 @@ Status EngineConfig::validate_live_gates(bool operator_confirmed_live) const {
     if (!any_enabled) {
         return {ErrorCode::InvalidArgument, "live mode requires at least one enabled symbol"};
     }
-    return Status::ok();
+    // Gate 7: every gate above passed, and there is still no adapter to run on.
+    return validate_execution_available();
 }
 
 Result<EngineConfig> load_config_string(const std::string& yaml_text) {
@@ -700,7 +796,8 @@ Result<EngineConfig> load_config_string(const std::string& yaml_text) {
     MM_RETURN_IF_ERROR_RESULT(check_known_keys(
         root, "",
         {"mode", "session_name", "exchange", "symbols", "strategy", "risk", "execution", "safety",
-         "paper", "monitoring", "persistence", "logging", "io", "strategies", "quote", "oms"}));
+         "paper", "monitoring", "persistence", "logging", "io", "strategies", "quote", "oms",
+         "execution_env"}));
 
     EngineConfig cfg;
 
@@ -735,6 +832,7 @@ Result<EngineConfig> load_config_string(const std::string& yaml_text) {
     MM_RETURN_IF_ERROR_RESULT(parse_oms(root["oms"], cfg.oms));
     MM_RETURN_IF_ERROR_RESULT(parse_execution(root["execution"], cfg.execution));
     MM_RETURN_IF_ERROR_RESULT(parse_safety(root["safety"], cfg.safety));
+    MM_RETURN_IF_ERROR_RESULT(parse_execution_env(root["execution_env"], cfg.execution_env));
     MM_RETURN_IF_ERROR_RESULT(parse_paper(root["paper"], cfg.paper));
     MM_RETURN_IF_ERROR_RESULT(parse_monitoring(root["monitoring"], cfg.monitoring));
     MM_RETURN_IF_ERROR_RESULT(parse_persistence(root["persistence"], cfg.persistence));
