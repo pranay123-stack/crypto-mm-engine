@@ -8,14 +8,18 @@ parameter optimization, and no alpha research. The separate quant research
 platform owns those and hands this one a finalized strategy module plus its
 validated parameters.
 
-> **Status: PHASE 9 OF 16 COMPLETE — NOT PRODUCTION READY.**
+> **Status: PHASE 10 OF 16 COMPLETE — NOT PRODUCTION READY.**
 > The pipeline now runs end to end: the Binance adapter synchronizes a real
 > book, a strategy runs inside a runtime that contains it, the quote manager
 > turns intent into desired order state, the risk engine decides what is
-> permitted, the OMS owns the order lifecycle, and a simulated venue executes
-> against the live book and answers asynchronously. **Nothing can reach a real
-> venue with an order** — no live execution adapter exists, and selecting one
-> fails at startup rather than falling back. See [Status](#status).
+> permitted, the OMS owns the order lifecycle, a simulated venue executes
+> against the live book and answers asynchronously, and the accounting layer
+> turns the resulting fills into position, cost basis and PnL that risk enforces
+> against. **Nothing can reach a real venue with an order** — no live execution
+> adapter exists, and selecting one fails at startup rather than falling back.
+> Phase 10 does not make the system production ready, does not prove any
+> strategy profitable, and does not prove live execution safe.
+> See [Status](#status).
 
 ---
 
@@ -149,6 +153,7 @@ strategy:
 | [oms.md](docs/oms.md)                           | order identity, lifecycle, reconciliation, recovery, invariants |
 | [execution.md](docs/execution.md)               | the execution interface, request and event models, asynchrony |
 | [paper-execution.md](docs/paper-execution.md)   | fill model, queue approximation, latency, failure injection, replay |
+| [accounting.md](docs/accounting.md)             | cost-basis model, PnL, fees, portfolio limits, recovery |
 | [benchmarks.md](docs/benchmarks.md)             | measured numbers and what they imply      |
 
 ## Status
@@ -248,14 +253,33 @@ Implemented and verified:
   about whether a strategy is any good. Selecting live execution fails at
   startup with a message naming the missing adapter; it never falls back.
 
-  738 tests, 88 benchmarks. Contains no network, no credentials, no venue wire
+  745 tests, 88 benchmarks. Contains no network, no credentials, no venue wire
   format, and no strategy, risk or OMS logic, enforced by the boundary checker.
+
+- **Phase 10 — Portfolio accounting and PnL.** Weighted-average cost basis,
+  realized and unrealized PnL, fee accumulation, per-symbol and portfolio
+  aggregates, balances, and a snapshot/recovery contract. Every step is checked
+  fixed-point arithmetic that refuses rather than wrapping, and every failure
+  leaves state completely unchanged.
+
+  The limits Phase 7 configured but could not enforce — `max_portfolio_notional`
+  and the loss limits — are enforced now, failing closed: an absent, stale or
+  degraded ledger refuses new exposure rather than passing for want of a number.
+  A faulted account never reads as flat.
+
+  Accounting owns position, cost basis, PnL, fees and balances, and nothing
+  else. It is not a second OMS: it consumes confirmed fills and has no API
+  through which a position could be set directly. Property tests compare it
+  against an independently implemented oracle rather than against itself.
+
+  812 tests, 97 benchmarks. Contains no venue code, no order lifecycle, no
+  market data and no strategy logic, enforced by the boundary checker.
 
   648 tests, 75 benchmarks.
 
 Not yet implemented — every one of these is currently absent, not partial:
 
-Phase 10 portfolio/PnL · Phase 11 reconciliation & recovery ·
+Phase 11 reconciliation & recovery ·
 Phase 12 Binance live execution · Phase 13 operations dashboard · Phase 14
 failure hardening · Phase 15 performance hardening · Phase 16 deployment.
 

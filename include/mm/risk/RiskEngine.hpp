@@ -34,6 +34,7 @@
 
 #include "mm/common/LatencyHistogram.hpp"
 #include "mm/common/Time.hpp"
+#include "mm/risk/PortfolioState.hpp"
 #include "mm/risk/RateLimiter.hpp"
 #include "mm/risk/RiskDecision.hpp"
 #include "mm/risk/RiskLimits.hpp"
@@ -50,6 +51,11 @@ struct RiskInput {
     PositionSnapshot position{};
     /// Working-order exposure as reported by the OMS.
     ExposureSnapshot exposure{};
+
+    /// The portfolio view from the accounting layer (Phase 10). Left default
+    /// -- and therefore invalid -- by a caller that has none, which makes
+    /// portfolio and loss limits refuse rather than silently pass.
+    PortfolioState portfolio{};
 
     /// Reference market. `bbo.is_sane()` gates price-band checks.
     BestBidAsk bbo{};

@@ -51,6 +51,22 @@ struct GlobalLimits {
     Notional max_portfolio_notional{};
     std::int32_t max_open_orders_total = 0;
 
+    // ---- loss limits (Phase 10) ----
+    //
+    // Evaluated against net PnL from the accounting layer. Zero means "not
+    // configured", which is the only reading that lets an operator run without
+    // one -- but an unset limit is genuinely unlimited, so the live gates
+    // require them (see EngineConfig::validate_live_gates).
+    //
+    // Losses are held as positive magnitudes: `max_daily_loss = 500` means
+    // "stop at -500". Storing them signed invites a sign error in exactly the
+    // comparison that must never be wrong.
+    Notional max_daily_loss{};
+    Notional max_session_loss{};
+    /// Beyond ordinary halting: the threshold at which the engine stops rather
+    /// than merely refusing new exposure. Must exceed max_daily_loss.
+    Notional emergency_loss{};
+
     // ---- rate limits ----
     std::int32_t max_new_orders_per_second = 0;
     std::int32_t max_cancels_per_second = 0;

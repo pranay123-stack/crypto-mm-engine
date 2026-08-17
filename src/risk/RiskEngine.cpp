@@ -178,6 +178,61 @@ RiskReason RiskEngine::screen(const OrderAction& action, const RiskInput& input)
     if (!input.exposure.determinate) {
         return RiskReason::UnknownExposure;
     }
+
+    // ---- portfolio and loss limits (Phase 10) -----------------------------
+    //
+    // Phase 7 configured these and could not enforce them: cross-symbol state
+    // and PnL did not exist until the accounting layer. They are enforced here
+    // now, and they fail closed in exactly the same way the position checks
+    // above do -- an absent or untrustworthy portfolio refuses new exposure
+    // rather than passing for want of a number.
+    const bool portfolio_limits_configured =
+        limits_.global.max_portfolio_notional.is_positive();
+    const bool loss_limits_configured = limits_.global.max_daily_loss.is_positive() ||
+                                        limits_.global.max_session_loss.is_positive() ||
+                                        limits_.global.emergency_loss.is_positive();
+
+    if (portfolio_limits_configured || loss_limits_configured) {
+        if (!input.portfolio.valid) {
+            // A default-constructed portfolio is invalid, so a caller that
+            // supplies none gets a refusal rather than a silent pass.
+            return RiskReason::PortfolioUnavailable;
+        }
+        if (input.portfolio.as_of_ns > 0) {
+            const Nanos age = clock_.steady() - input.portfolio.as_of_ns;
+            if (age > limits_.global.max_position_age_ns) {
+                return RiskReason::PortfolioStale;
+            }
+        }
+    }
+
+    if (portfolio_limits_configured &&
+        input.portfolio.gross_notional > limits_.global.max_portfolio_notional) {
+        return RiskReason::MaxPortfolioNotional;
+    }
+
+    if (loss_limits_configured) {
+        // Notional limits survive an unmarkable symbol -- exposure is known
+        // even when its mark is not. A loss limit does not: totalling only the
+        // symbols that could be marked would understate the loss by exactly
+        // the ones that could not.
+        if (!input.portfolio.pnl_determinate) {
+            return RiskReason::PnlIndeterminate;
+        }
+        // Losses are held as positive magnitudes; net_pnl is signed. A loss of
+        // 600 against a limit of 500 is net_pnl = -600.
+        const Notional loss = Notional::from_raw(0) - input.portfolio.net_pnl;
+        if (limits_.global.emergency_loss.is_positive() && loss >= limits_.global.emergency_loss) {
+            return RiskReason::EmergencyLoss;
+        }
+        if (limits_.global.max_daily_loss.is_positive() && loss >= limits_.global.max_daily_loss) {
+            return RiskReason::MaxDailyLoss;
+        }
+        if (limits_.global.max_session_loss.is_positive() &&
+            loss >= limits_.global.max_session_loss) {
+            return RiskReason::MaxSessionLoss;
+        }
+    }
     return RiskReason::None;
 }
 

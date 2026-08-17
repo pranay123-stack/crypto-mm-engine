@@ -106,6 +106,9 @@ enum class RiskReason : std::uint8_t {
     // ---- knowledge ----
     PositionUnavailable, ///< no authoritative position to reason from
     PositionStale,
+    PortfolioUnavailable, ///< accounting cannot vouch for the portfolio
+    PortfolioStale,       ///< the portfolio view is older than tolerated
+    PnlIndeterminate,     ///< a loss limit cannot be evaluated: PnL is unknown
     UnknownExposure,     ///< a working order whose state we cannot determine
 
     // ---- infrastructure ----
@@ -117,6 +120,11 @@ enum class RiskReason : std::uint8_t {
     /// A reduction produced something that was itself invalid -- below the
     /// venue's minimum, off the lot grid. Reducing is not always possible.
     ReductionInvalid,
+
+    // ---- loss limits (Phase 10) ----
+    MaxDailyLoss,
+    MaxSessionLoss,
+    EmergencyLoss,
 };
 [[nodiscard]] std::string_view to_string(RiskReason r) noexcept;
 
@@ -128,7 +136,8 @@ enum class RiskReason : std::uint8_t {
     return r == RiskReason::PositionUnavailable || r == RiskReason::PositionStale ||
            r == RiskReason::UnknownExposure || r == RiskReason::ReferencePriceUnavailable ||
            r == RiskReason::StaleMarket || r == RiskReason::ArithmeticOverflow ||
-           r == RiskReason::ConfigurationMissing;
+           r == RiskReason::ConfigurationMissing || r == RiskReason::PortfolioUnavailable ||
+           r == RiskReason::PortfolioStale || r == RiskReason::PnlIndeterminate;
 }
 
 }  // namespace mm::risk
