@@ -101,6 +101,17 @@ Status RiskEngine::rearm() {
     return Status::ok();
 }
 
+void RiskEngine::stamp_approval(RiskDecision& decision) {
+    // The only place an ApprovedAction becomes valid. Friendship makes this the
+    // single door through which an order can reach the OMS.
+    if (!decision.is_approved()) {
+        return;
+    }
+    decision.approval.action_ = decision.approved;
+    decision.approval.sequence_ = ++approval_sequence_;
+    decision.approval.valid_ = true;
+}
+
 void RiskEngine::record(const RiskDecision& decision) {
     ++metrics_.evaluations;
     switch (decision.verdict) {
@@ -353,6 +364,7 @@ RiskDecision RiskEngine::approve_cancel(const OrderAction& cancel, const RiskInp
     decision.decided_ns = now;
     decision.generation = cancel.generation;
     decision.trace = cancel.trace;
+    stamp_approval(decision);
 
     // Ownership is the one thing that can refuse a cancel: cancelling another
     // subsystem's order is not withdrawal, it is interference.
@@ -388,6 +400,7 @@ RiskDecision RiskEngine::evaluate(const OrderAction& action, const RiskInput& in
         decision.decided_ns = started;
         decision.generation = action.generation;
         decision.trace = action.trace;
+        stamp_approval(decision);
         record(decision);
         latency_.record(clock_.steady() - started);
         return decision;
@@ -452,6 +465,7 @@ RiskDecision RiskEngine::evaluate(const OrderAction& action, const RiskInput& in
         decision.decided_ns = started;
         decision.generation = action.generation;
         decision.trace = action.trace;
+        stamp_approval(decision);
         record(decision);
         latency_.record(clock_.steady() - started);
         return decision;
@@ -523,6 +537,7 @@ RiskDecision RiskEngine::evaluate(const OrderAction& action, const RiskInput& in
     decision.decided_ns = started;
     decision.generation = action.generation;
     decision.trace = action.trace;
+    stamp_approval(decision);
     record(decision);
     latency_.record(clock_.steady() - started);
     return decision;

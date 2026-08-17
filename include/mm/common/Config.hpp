@@ -248,6 +248,39 @@ struct IoConfig {
     std::int32_t trading_cpu = -1;
 };
 
+/// Phase 8 §38. Everything the OMS needs from a config file. Timeouts are the
+/// load-bearing ones: they decide how long the engine is willing to believe a
+/// request is still in flight before admitting it does not know.
+struct OmsConfigYaml {
+    /// Prefix stamped into every client order id we mint. Must leave room for
+    /// the session and sequence within the venue's id length limit.
+    std::string client_id_prefix = "mm";
+    /// Distinguishes ids minted by one run from another's. Zero means "derive
+    /// from the session start time" and is resolved before the OMS is built.
+    std::uint64_t session_id = 0;
+    /// The venue's maximum client-order-id length. Truncating an id would make
+    /// two orders indistinguishable, so generation fails instead.
+    std::uint32_t max_client_id_length = 36;
+
+    /// How long a request may stay unanswered before the order becomes
+    /// Unknown. Not a cancellation -- see docs/oms.md §12.
+    std::uint32_t new_request_timeout_ms = 5'000;
+    std::uint32_t cancel_request_timeout_ms = 5'000;
+    std::uint32_t replace_request_timeout_ms = 5'000;
+
+    /// How often to reconcile against the venue's open-order listing. Zero
+    /// disables periodic reconciliation; startup reconciliation is separate.
+    std::uint32_t reconciliation_interval_ms = 30'000;
+
+    /// Capacity of the order table. Reached means new orders are refused, not
+    /// that older ones are evicted.
+    std::uint32_t max_orders = 1'024;
+
+    /// Journal retention. Zero disables in-memory journalling entirely.
+    std::uint32_t journal_capacity = 65'536;
+    bool journal_enabled = true;
+};
+
 struct EngineConfig {
     TradingMode mode = TradingMode::Paper;
     std::string session_name = "default";
@@ -262,6 +295,7 @@ struct EngineConfig {
     /// by changing one line.
     std::map<std::string, Params, std::less<>> strategy_params;
     RiskConfig risk;
+    OmsConfigYaml oms;
     ExecutionRateConfig execution;
     SafetyConfig safety;
     PaperConfig paper;
